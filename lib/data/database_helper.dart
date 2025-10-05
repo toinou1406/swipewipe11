@@ -32,7 +32,6 @@ class DatabaseHelper {
     const idType = 'INTEGER PRIMARY KEY AUTOINCREMENT';
     const textType = 'TEXT NOT NULL';
     const nullableTextType = 'TEXT';
-    const intType = 'INTEGER NOT NULL';
     const nullableIntType = 'INTEGER';
     const boolType = 'BOOLEAN NOT NULL';
     const dateType = 'TEXT NOT NULL';

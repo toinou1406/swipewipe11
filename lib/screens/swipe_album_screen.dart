@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:swipewipe10/data/database_helper.dart';
 import 'package:swipewipe10/data/providers.dart';
 import 'package:swipewipe10/models/media.dart' as app_media;
 import 'package:swipewipe10/widgets/media_card.dart';
@@ -21,7 +20,7 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
   app_media.Media? _lastSwipedMedia;
   String? _lastAction; // 'add', 'move'
 
-  Map<String, File> _fileCache = {};
+  final Map<String, File> _fileCache = {};
   bool _isPreloading = false;
 
   @override
@@ -68,6 +67,7 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
 
   void _onSwipeUp() async {
     if (_lastSwipedMedia == null || _lastAction == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No recent action to undo.')),
       );
@@ -75,11 +75,13 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
     }
 
     final dbHelper = ref.read(databaseHelperProvider);
-    final mediaToRestore = _lastSwipedMedia!.copyWith(setAlbumIdToNull: true);
+    final lastSwiped = _lastSwipedMedia!;
+    final mediaToRestore = lastSwiped.copyWith(setAlbumIdToNull: true);
 
     await dbHelper.updateMedia(mediaToRestore);
     ref.read(swipeCardStateProvider.notifier).undo(mediaToRestore);
 
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Action undone.')),
     );
@@ -94,6 +96,7 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
     final allAlbums = await ref.read(albumsProvider.future);
     final otherAlbums = allAlbums.where((album) => album.id != widget.albumId).toList();
 
+    if (!mounted) return;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -110,7 +113,9 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
               _lastAction = 'move';
             });
             ref.read(swipeCardStateProvider.notifier).removeCard();
-            Navigator.pop(context);
+            if (context.mounted) {
+              Navigator.pop(context);
+            }
           },
         );
       },
@@ -134,10 +139,10 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
               ? const Center(child: Text('No more media to sort!'))
               : Stack(
                   alignment: Alignment.center,
-                  children: mediaList.map((media) {
+                  children: mediaList.map<Widget>((media) {
                     final file = _fileCache[media.originalPath];
                     if (file == null) {
-                      return const Center(child: CircularProgressIndicator());
+                      return const SizedBox.shrink();
                     }
                     return Padding(
                       padding: const EdgeInsets.all(16.0),

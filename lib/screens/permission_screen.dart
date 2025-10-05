@@ -9,6 +9,10 @@ class PermissionScreen extends StatelessWidget {
 
   Future<void> _requestPermission(BuildContext context) async {
     final PermissionState ps = await PhotoManager.requestPermissionExtend();
+
+    // Check if the widget is still in the tree before showing a dialog.
+    if (!context.mounted) return;
+
     if (ps.hasAccess) {
       onPermissionGranted();
     } else {
@@ -28,15 +32,15 @@ class PermissionScreen extends StatelessWidget {
               child: Text('Cancel', style: TextStyle(color: kColorWhite)),
             ),
             ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: kColorWhite,
+                foregroundColor: kColorBlack,
+              ),
               onPressed: () {
                 PhotoManager.openSetting(); // Opens the app settings
                 Navigator.of(context).pop();
               },
               child: const Text('Open Settings'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: kColorWhite,
-                foregroundColor: kColorBlack,
-              ),
             ),
           ],
         ),
@@ -68,13 +72,13 @@ class PermissionScreen extends StatelessWidget {
             ),
             const SizedBox(height: 48),
             ElevatedButton(
-              onPressed: () => _requestPermission(context),
               style: ElevatedButton.styleFrom(
                 backgroundColor: kColorWhite,
                 foregroundColor: kColorBlack,
                 minimumSize: const Size(double.infinity, 60),
                 textStyle: Theme.of(context).textTheme.labelLarge,
               ),
+              onPressed: () => _requestPermission(context),
               child: const Text('Grant Access'),
             ),
           ],

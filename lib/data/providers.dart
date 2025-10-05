@@ -1,6 +1,14 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:disk_space/disk_space.dart';
+import 'package:photo_manager/photo_manager.dart';
+
 import 'package:swipewipe10/data/database_helper.dart';
+import 'package:swipewipe10/data/media_repository.dart';
 import 'package:swipewipe10/models/album.dart';
+import 'package:swipewipe10/models/media.dart';
+
 
 // Provider for the DatabaseHelper instance
 final databaseHelperProvider = Provider<DatabaseHelper>((ref) {
@@ -103,7 +111,7 @@ final swipeCardStateProvider = StateNotifierProvider<SwipeCardNotifier, List<Med
 });
 
 class SwipeCardNotifier extends StateNotifier<List<Media>> {
-  SwipeCardNotifier(List<Media> initialMedia) : super(initialMedia);
+  SwipeCardNotifier(super.initialMedia);
 
   void removeCard() {
     if (state.isNotEmpty) {

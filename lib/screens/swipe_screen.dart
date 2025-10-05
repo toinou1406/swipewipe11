@@ -2,10 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:swipewipe10/data/database_helper.dart';
 import 'package:swipewipe10/data/providers.dart';
 import 'package:swipewipe10/models/media.dart' as app_media;
-import 'package:swipewipe10/utils/theme.dart';
 import 'package:swipewipe10/widgets/media_card.dart';
 import 'package:swipewipe10/widgets/swipe_menu.dart';
 
@@ -20,8 +18,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
   app_media.Media? _lastSwipedMedia;
   String? _lastAction; // 'delete', 'album'
 
-  // Pre-fetch file data to avoid FutureBuilder in build method
-  Map<String, File> _fileCache = {};
+  final Map<String, File> _fileCache = {};
   bool _isPreloading = false;
 
   @override
@@ -61,25 +58,20 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
   void _onSwipeLeft(app_media.Media media) async {
     final dbHelper = ref.read(databaseHelperProvider);
 
-    // 1. Mark as deleted in the local DB
     final updatedMedia = media.copyWith(deletedAt: DateTime.now());
     await dbHelper.updateMedia(updatedMedia);
 
-    // 2. Check trash size and permanently delete oldest if necessary
     final trashedItems = await dbHelper.readLastTenTrashedMedia();
     if (trashedItems.length >= 10) {
       final oldestMedia = await dbHelper.readOldestTrashedMedia();
       if (oldestMedia != null) {
-        // Use PhotoManager to request native OS deletion
         final List<String> deletedIds = await PhotoManager.editor.deleteWithIds([oldestMedia.originalPath]);
         if (deletedIds.isNotEmpty) {
-          // If successful, remove from our DB
           await dbHelper.deleteMediaPermanently(oldestMedia.id!);
         }
       }
     }
 
-    // 3. Update UI
     setState(() {
       _lastSwipedMedia = updatedMedia;
       _lastAction = 'delete';
@@ -89,6 +81,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
 
   void _onSwipeUp() async {
     if (_lastSwipedMedia == null || _lastAction == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No recent action to undo.')),
       );
@@ -98,10 +91,13 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     final dbHelper = ref.read(databaseHelperProvider);
     app_media.Media mediaToRestore;
 
+    // Use a local variable to avoid accessing the nullable class member multiple times.
+    final lastSwiped = _lastSwipedMedia!;
+
     if (_lastAction == 'delete') {
-      mediaToRestore = _lastSwipedMedia!.copyWith(setDeletedAtToNull: true);
+      mediaToRestore = lastSwiped.copyWith(setDeletedAtToNull: true);
     } else if (_lastAction == 'album') {
-      mediaToRestore = _lastSwipedMedia!.copyWith(setAlbumIdToNull: true);
+      mediaToRestore = lastSwiped.copyWith(setAlbumIdToNull: true);
     } else {
       return;
     }
@@ -109,6 +105,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     await dbHelper.updateMedia(mediaToRestore);
     ref.read(swipeCardStateProvider.notifier).undo(mediaToRestore);
 
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Action undone.')),
     );
@@ -121,6 +118,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
 
   void _onSwipeDown(app_media.Media media) async {
     final albums = await ref.read(albumsProvider.future);
+    if (!mounted) return;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -137,7 +135,9 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
               _lastAction = 'album';
             });
             ref.read(swipeCardStateProvider.notifier).removeCard();
-            Navigator.pop(context);
+            if (context.mounted) {
+              Navigator.pop(context);
+            }
           },
         );
       },
@@ -147,7 +147,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
   @override
   Widget build(BuildContext context) {
     final mediaList = ref.watch(swipeCardStateProvider);
-    // Listen to the provider to trigger preloading when the list changes
     ref.listen(swipeCardStateProvider, (previous, next) {
       _preloadMediaFiles();
     });
@@ -155,7 +154,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     return Scaffold(
       body: Column(
         children: [
-          // This progress bar is now just a placeholder as we don't track file sizes anymore
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
             child: Row(
@@ -172,10 +170,10 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
                     ? const Center(child: Text('No more media to sort!'))
                     : Stack(
                         alignment: Alignment.center,
-                        children: mediaList.map((media) {
+                        children: mediaList.map<Widget>((media) {
                           final file = _fileCache[media.originalPath];
                           if (file == null) {
-                            return const Center(child: CircularProgressIndicator());
+                            return const SizedBox.shrink(); // Return an empty widget if file not preloaded
                           }
                           return MediaCard(
                             mediaFile: file,
