@@ -43,8 +43,9 @@ class AppStartupWrapper extends ConsumerWidget {
       loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (err, stack) => Scaffold(body: Center(child: Text('Error checking permissions: $err'))),
       data: (permission) {
-        // Add a null check for robustness, as suggested by the analyzer.
-        if (permission.hasAccess) {
+        // Use the null-aware operator `?.` to safely access `hasAccess`.
+        // This handles the case where `permission` might be null.
+        if (permission?.hasAccess == true) {
           // If permission is granted, move to the media sync phase
           return const MediaSyncWrapper();
         } else {
