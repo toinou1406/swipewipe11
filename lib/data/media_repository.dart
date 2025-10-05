@@ -13,8 +13,7 @@ class MediaRepository {
     final PermissionState ps = await PhotoManager.requestPermissionExtend();
     if (!ps.hasAccess) {
       // Handle the case where permission is not granted.
-      // For now, we'll just print a message.
-      print("Permission to access photos was not granted.");
+      // We can add more robust error handling or logging here if needed.
       return;
     }
 
