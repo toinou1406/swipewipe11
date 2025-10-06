@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:disk_space/disk_space.dart';
+import 'package:storage_space/storage_space.dart'; // Replaced disk_space
 import 'package:photo_manager/photo_manager.dart';
 
 import 'package:swipewipe10/data/database_helper.dart';
@@ -29,13 +29,12 @@ final sharedPreferencesProvider = FutureProvider<SharedPreferences>((ref) async 
 });
 
 final storageStatsProvider = FutureProvider<Map<String, double>>((ref) async {
-  final double totalSpace = await DiskSpace.getTotalDiskSpace ?? 0.0;
-  final double freeSpace = await DiskSpace.getFreeDiskSpace ?? 0.0;
-  final double usedSpace = totalSpace - freeSpace;
+  // Use the new, more reliable package
+  StorageSpace storage = await getStorageSpace;
 
   return {
-    'totalSpace': totalSpace / 1024,
-    'usedSpace': usedSpace / 1024,
+    'totalSpace': storage.total.gigabytes,
+    'usedSpace': storage.used.gigabytes,
     'freedSpaceThisMonth': 2.3, // Mocked as per original plan
   };
 });

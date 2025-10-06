@@ -14,7 +14,7 @@ dependencies:
   # Core
   flutter_riverpod: ^2.5.1
   riverpod_annotation: ^2.3.5
-  disk_space: ^0.2.1
+  storage_space: ^1.0.1 # Modern alternative for disk_space
 
   # Database
   sqflite: ^2.3.3+1
