@@ -18,7 +18,7 @@ class SwipeAlbumScreen extends ConsumerStatefulWidget {
 
 class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
   app_media.Media? _lastSwipedMedia;
-  String? _lastAction; // 'add', 'move'
+  String? _lastAction;
 
   final Map<String, File> _fileCache = {};
   bool _isPreloading = false;
@@ -26,15 +26,17 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _preloadMediaFiles();
+    _preloadNextMediaFiles();
   }
 
-  Future<void> _preloadMediaFiles() async {
+  Future<void> _preloadNextMediaFiles({int count = 5}) async {
     if (_isPreloading) return;
     setState(() { _isPreloading = true; });
 
     final mediaList = ref.read(swipeCardStateProvider);
-    for (final media in mediaList) {
+    final upcomingMedia = mediaList.take(count);
+
+    for (final media in upcomingMedia) {
       if (_fileCache.containsKey(media.originalPath)) continue;
       final asset = await AssetEntity.fromId(media.originalPath);
       if (asset != null) {
@@ -46,6 +48,27 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
     }
     if (mounted) {
       setState(() { _isPreloading = false; });
+    }
+  }
+
+  void _handleSwipe(DragEndDetails details, app_media.Media media) {
+    if (details.primaryVelocity == null) return;
+
+    // Swipe right (pass)
+    if (details.primaryVelocity! > 200) {
+      _onSwipeRight();
+    }
+    // Swipe left (add to album)
+    else if (details.primaryVelocity! < -200) {
+      _onSwipeLeft(media);
+    }
+    // Swipe up (undo)
+    else if (details.primaryVelocity! < -500 && details.velocity.pixelsPerSecond.dx.abs() < details.velocity.pixelsPerSecond.dy.abs()){
+       _onSwipeUp();
+    }
+    // Swipe down (move to another album)
+    else if (details.primaryVelocity! > 500 && details.velocity.pixelsPerSecond.dx.abs() < details.velocity.pixelsPerSecond.dy.abs()){
+       _onSwipeDown(media);
     }
   }
 
@@ -82,14 +105,9 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
     ref.read(swipeCardStateProvider.notifier).undo(mediaToRestore);
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Action undone.')),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Action undone.')));
 
-    setState(() {
-      _lastSwipedMedia = null;
-      _lastAction = null;
-    });
+    setState(() { _lastSwipedMedia = null; _lastAction = null; });
   }
 
   void _onSwipeDown(app_media.Media media) async {
@@ -108,14 +126,9 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
             final updatedMedia = media.copyWith(albumId: newAlbumId);
             await dbHelper.updateMedia(updatedMedia);
 
-            setState(() {
-              _lastSwipedMedia = updatedMedia;
-              _lastAction = 'move';
-            });
+            setState(() { _lastSwipedMedia = updatedMedia; _lastAction = 'move'; });
             ref.read(swipeCardStateProvider.notifier).removeCard();
-            if (context.mounted) {
-              Navigator.pop(context);
-            }
+            if (context.mounted) Navigator.pop(context);
           },
         );
       },
@@ -126,36 +139,40 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
   Widget build(BuildContext context) {
     final mediaList = ref.watch(swipeCardStateProvider);
     ref.listen(swipeCardStateProvider, (previous, next) {
-      _preloadMediaFiles();
+      _preloadNextMediaFiles();
     });
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Add to Album'),
       ),
-      body: _isPreloading && mediaList.isNotEmpty
+      body: _isPreloading && mediaList.isNotEmpty && _fileCache.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : mediaList.isEmpty
               ? const Center(child: Text('No more media to sort!'))
-              : Stack(
-                  alignment: Alignment.center,
-                  children: mediaList.map<Widget>((media) {
-                    final file = _fileCache[media.originalPath];
-                    if (file == null) {
-                      return const SizedBox.shrink();
-                    }
-                    return Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: MediaCard(
-                        mediaFile: file,
-                        mediaType: media.mediaType,
-                        onSwipeLeft: () => _onSwipeLeft(media),
-                        onSwipeRight: _onSwipeRight,
-                        onSwipeUp: _onSwipeUp,
-                        onSwipeDown: () => _onSwipeDown(media),
-                      ),
-                    );
-                  }).toList(),
+              : Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Stack(
+                      alignment: Alignment.center,
+                      children: List.generate(
+                        mediaList.take(3).length,
+                        (index) {
+                          final media = mediaList[index];
+                          final file = _fileCache[media.originalPath];
+                          if (file == null) return const SizedBox.shrink();
+
+                          return Transform.translate(
+                            offset: Offset(0, 10.0 * index),
+                            child: MediaCard(
+                              mediaFile: file,
+                              mediaType: media.mediaType,
+                              isTopCard: index == 0,
+                              onSwipe: (details) => _handleSwipe(details, media),
+                            ),
+                          );
+                        },
+                      ).reversed.toList(),
+                    ),
                 ),
     );
   }

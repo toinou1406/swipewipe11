@@ -2,98 +2,119 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:swipewipe10/utils/theme.dart';
 
-class MediaCard extends StatelessWidget {
+class MediaCard extends StatefulWidget {
   final File mediaFile;
   final String mediaType;
-  final VoidCallback onSwipeLeft;
-  final VoidCallback onSwipeRight;
-  final VoidCallback onSwipeUp;
-  final VoidCallback onSwipeDown;
+  final bool isTopCard;
+  final Function(DragEndDetails) onSwipe;
 
   const MediaCard({
     super.key,
     required this.mediaFile,
     required this.mediaType,
-    required this.onSwipeLeft,
-    required this.onSwipeRight,
-    required this.onSwipeUp,
-    required this.onSwipeDown,
+    required this.isTopCard,
+    required this.onSwipe,
   });
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onHorizontalDragEnd: (details) {
-        if (details.primaryVelocity! > 0) {
-          onSwipeRight(); // Swiped Right
-        } else if (details.primaryVelocity! < 0) {
-          onSwipeLeft(); // Swiped Left
-        }
-      },
-      onVerticalDragEnd: (details) {
-        if (details.primaryVelocity! > 0) {
-          onSwipeDown(); // Swiped Down
-        } else if (details.primaryVelocity! < 0) {
-          onSwipeUp(); // Swiped Up
-        }
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: kColorGreyDark, width: 2),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // --- Media Display ---
-              _buildMediaDisplay(),
+  State<MediaCard> createState() => _MediaCardState();
+}
 
-              // --- Swipe Indicators ---
-              _buildSwipeIndicator(icon: Icons.arrow_back, alignment: Alignment.centerLeft),
-              _buildSwipeIndicator(icon: Icons.arrow_forward, alignment: Alignment.centerRight),
-              _buildSwipeIndicator(icon: Icons.arrow_upward, alignment: Alignment.topCenter),
-              _buildSwipeIndicator(icon: Icons.arrow_downward, alignment: Alignment.bottomCenter),
-            ],
-          ),
-        ),
+class _MediaCardState extends State<MediaCard> {
+  Offset _position = Offset.zero;
+  bool _isDragging = false;
+
+  void _onPanStart(DragStartDetails details) {
+    if (widget.isTopCard) {
+      setState(() {
+        _isDragging = true;
+      });
+    }
+  }
+
+  void _onPanUpdate(DragUpdateDetails details) {
+    if (widget.isTopCard) {
+      setState(() {
+        _position += details.delta;
+      });
+    }
+  }
+
+  void _onPanEnd(DragEndDetails details) {
+    if (widget.isTopCard) {
+      setState(() {
+        _isDragging = false;
+      });
+      // Reset position after swipe to not affect the next card
+      _position = Offset.zero;
+      widget.onSwipe(details);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+
+    return GestureDetector(
+      onPanStart: _onPanStart,
+      onPanUpdate: _onPanUpdate,
+      onPanEnd: _onPanEnd,
+      child: AnimatedContainer(
+        duration: Duration(milliseconds: _isDragging ? 0 : 200),
+        transform: Matrix4.identity()
+          ..translate(_position.dx, _position.dy)
+          ..rotateZ(_getRotationAngle()),
+        child: _buildCardContent(size),
       ),
     );
   }
 
-  Widget _buildMediaDisplay() {
-    // Apply a black and white filter to the media
-    return ColorFiltered(
-      colorFilter: const ColorFilter.matrix([
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0.2126, 0.7152, 0.0722, 0, 0,
-        0,      0,      0,      1, 0,
-      ]),
-      child: mediaType == 'video'
-          ? Stack(
-              fit: StackFit.expand,
-              children: [
-                Image.file(mediaFile, fit: BoxFit.cover),
-                const Center(
-                  child: Icon(Icons.play_circle_outline, color: kColorWhite, size: 80),
-                ),
-              ],
-            )
-          : Image.file(mediaFile, fit: BoxFit.cover),
+  double _getRotationAngle() {
+    // Rotate the card slightly as it's dragged
+    return _position.dx / (MediaQuery.of(context).size.width / 2) * 0.2;
+  }
+
+  Widget _buildCardContent(Size size) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: kColorGreyDark, width: 2),
+        image: DecorationImage(
+          image: FileImage(widget.mediaFile),
+          fit: BoxFit.cover,
+        ),
+      ),
+      child: Stack(
+        children: [
+          // Show video icon if applicable
+          if (widget.mediaType == 'video')
+            const Center(
+              child: Icon(Icons.play_circle_outline, color: kColorWhite, size: 80),
+            ),
+          // Show "DELETE" or "KEEP" overlay based on swipe direction
+          if (_position.dx.abs() > 20) _buildSwipeOverlay(),
+        ],
+      ),
     );
   }
 
-  Widget _buildSwipeIndicator({required IconData icon, required Alignment alignment}) {
-    return Align(
-      alignment: alignment,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Icon(
-          icon,
-          color: kColorWhite.withOpacity(0.2), // Faint indicator
-          size: 40,
+  Widget _buildSwipeOverlay() {
+    final isSwipingRight = _position.dx > 0;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: isSwipingRight
+            ? Colors.green.withOpacity(0.4)
+            : Colors.red.withOpacity(0.4),
+      ),
+      child: Center(
+        child: Text(
+          isSwipingRight ? 'KEEP' : 'DELETE',
+          style: const TextStyle(
+            fontSize: 48,
+            fontWeight: FontWeight.bold,
+            color: kColorWhite,
+          ),
         ),
       ),
     );
