@@ -45,5 +45,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>SwipeClean needs access to your photo library to help you sort and clean up your media.</string>
 </dict>
 </plist>
