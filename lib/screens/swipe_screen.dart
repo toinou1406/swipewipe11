@@ -49,24 +49,22 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     }
   }
 
-  void _handleSwipe(DragEndDetails details, app_media.Media media) {
-    if (details.primaryVelocity == null) return;
-
-    // Swipe right (keep)
-    if (details.primaryVelocity! > 200) {
-      _onSwipeRight();
-    }
-    // Swipe left (delete)
-    else if (details.primaryVelocity! < -200) {
-      _onSwipeLeft(media);
-    }
-    // Swipe up (undo)
-    else if (details.primaryVelocity! < -500 && details.velocity.pixelsPerSecond.dx.abs() < details.velocity.pixelsPerSecond.dy.abs()){
-       _onSwipeUp();
-    }
-    // Swipe down (album menu)
-    else if (details.primaryVelocity! > 500 && details.velocity.pixelsPerSecond.dx.abs() < details.velocity.pixelsPerSecond.dy.abs()){
-       _onSwipeDown(media);
+  void _handleSwipe(SwipeDirection direction, app_media.Media media) {
+    switch (direction) {
+      case SwipeDirection.right:
+        _onSwipeRight();
+        break;
+      case SwipeDirection.left:
+        _onSwipeLeft(media);
+        break;
+      case SwipeDirection.up:
+        _onSwipeUp();
+        break;
+      case SwipeDirection.down:
+        _onSwipeDown(media);
+        break;
+      case SwipeDirection.none:
+        break;
     }
   }
 
@@ -178,19 +176,19 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
                       child: Stack(
                           alignment: Alignment.center,
                           children: List.generate(
-                            mediaList.take(3).length, // Build only a few cards
+                            mediaList.take(3).length,
                             (index) {
                               final media = mediaList[index];
                               final file = _fileCache[media.originalPath];
                               if (file == null) return const SizedBox.shrink();
 
                               return Transform.translate(
-                                offset: Offset(0, 10.0 * index), // Stack effect
+                                offset: Offset(0, 10.0 * index),
                                 child: MediaCard(
                                   mediaFile: file,
                                   mediaType: media.mediaType,
                                   isTopCard: index == 0,
-                                  onSwipe: (details) => _handleSwipe(details, media),
+                                  onSwiped: (direction) => _handleSwipe(direction, media),
                                 ),
                               );
                             },

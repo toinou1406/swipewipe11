@@ -51,24 +51,22 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
     }
   }
 
-  void _handleSwipe(DragEndDetails details, app_media.Media media) {
-    if (details.primaryVelocity == null) return;
-
-    // Swipe right (pass)
-    if (details.primaryVelocity! > 200) {
-      _onSwipeRight();
-    }
-    // Swipe left (add to album)
-    else if (details.primaryVelocity! < -200) {
-      _onSwipeLeft(media);
-    }
-    // Swipe up (undo)
-    else if (details.primaryVelocity! < -500 && details.velocity.pixelsPerSecond.dx.abs() < details.velocity.pixelsPerSecond.dy.abs()){
-       _onSwipeUp();
-    }
-    // Swipe down (move to another album)
-    else if (details.primaryVelocity! > 500 && details.velocity.pixelsPerSecond.dx.abs() < details.velocity.pixelsPerSecond.dy.abs()){
-       _onSwipeDown(media);
+  void _handleSwipe(SwipeDirection direction, app_media.Media media) {
+    switch (direction) {
+      case SwipeDirection.right:
+        _onSwipeRight();
+        break;
+      case SwipeDirection.left:
+        _onSwipeLeft(media);
+        break;
+      case SwipeDirection.up:
+        _onSwipeUp();
+        break;
+      case SwipeDirection.down:
+        _onSwipeDown(media);
+        break;
+      case SwipeDirection.none:
+        break;
     }
   }
 
@@ -167,7 +165,7 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
                               mediaFile: file,
                               mediaType: media.mediaType,
                               isTopCard: index == 0,
-                              onSwipe: (details) => _handleSwipe(details, media),
+                              onSwiped: (direction) => _handleSwipe(direction, media),
                             ),
                           );
                         },
