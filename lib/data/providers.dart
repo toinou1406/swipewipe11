@@ -92,22 +92,52 @@ class AlbumListNotifier extends AsyncNotifier<List<Album>> {
   }
 }
 
-final swipeCardStateProvider = NotifierProvider<SwipeCardNotifier, List<Media>>(SwipeCardNotifier.new);
+final swipeCardStateProvider = AsyncNotifierProvider<SwipeNotifier, List<Media>>(SwipeNotifier.new);
 
-class SwipeCardNotifier extends Notifier<List<Media>> {
+class SwipeNotifier extends AsyncNotifier<List<Media>> {
+  int _page = 0;
+  bool _isLoading = false;
+  static const _pageSize = 20;
+
   @override
-  List<Media> build() {
-    return ref.watch(unsortedMediaProvider).value ?? [];
+  Future<List<Media>> build() async {
+    _page = 0;
+    return _fetchNextPage();
   }
 
-  void removeCard() {
-    if (state.isNotEmpty) {
-      state = state.sublist(1);
+  Future<List<Media>> _fetchNextPage() async {
+    if (_isLoading) return state.value ?? [];
+    _isLoading = true;
+
+    final dbHelper = ref.read(databaseHelperProvider);
+    final newMedia = await dbHelper.readUnsortedMedia(limit: _pageSize, offset: _page * _pageSize);
+    _page++;
+
+    _isLoading = false;
+    return newMedia;
+  }
+
+  Future<void> loadMore() async {
+    final newMedia = await _fetchNextPage();
+    if (newMedia.isNotEmpty) {
+      state = AsyncData([...state.value!, ...newMedia]);
     }
   }
 
-  void undo(Media lastMedia) {
-    state = [lastMedia, ...state];
+  void removeFirst() {
+    if (state.value != null && state.value!.isNotEmpty) {
+      state = AsyncData(state.value!.sublist(1));
+      // Pre-fetch if we are getting to the end of the list
+      if (state.value!.length < 5) {
+        loadMore();
+      }
+    }
+  }
+
+  void undo(Media media) {
+     if (state.value != null) {
+      state = AsyncData([media, ...state.value!]);
+    }
   }
 }
 
