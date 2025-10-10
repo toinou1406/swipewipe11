@@ -154,7 +154,6 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
               controller: _swiperController,
               cardsCount: mediaList.length,
               onSwipe: _onSwipe,
-              onDrag: (details, offset) => _dragPosition.value = offset,
               duration: const Duration(milliseconds: 200),
               backCardOffset: const Offset(0, 20),
               scale: 0.9,
