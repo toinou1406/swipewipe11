@@ -19,9 +19,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
   final CardSwiperController _swiperController = CardSwiperController();
   final ValueNotifier<Offset> _dragPosition = ValueNotifier(Offset.zero);
 
-  app_media.Media? _lastSwipedMedia;
-  String? _lastAction;
-
   final Map<String, File> _fileCache = {};
   bool _isPreloading = false;
 
@@ -55,7 +52,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
   }
 
   Future<bool> _onSwipe(int previousIndex, int? currentIndex, CardSwiperDirection direction) async {
-    _dragPosition.value = Offset.zero; // Reset position after swipe
+    _dragPosition.value = Offset.zero;
     final media = ref.read(swipeCardStateProvider).value![previousIndex];
 
     if (direction == CardSwiperDirection.right) {
@@ -65,16 +62,13 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     } else if (direction == CardSwiperDirection.bottom) {
       await _onSwipeDown(media);
     }
-    // The undo (top swipe) is handled by a separate gesture detector
+    // The undo (top swipe) is handled by a separate gesture detector and controller.
     return true;
   }
 
   void _onSwipeRight() {
+    ref.read(swipeHistoryProvider.notifier).state = null; // No undo for "keep"
     ref.read(swipeCardStateProvider.notifier).removeFirst();
-    setState(() {
-      _lastSwipedMedia = null; // No undo for "keep"
-      _lastAction = null;
-    });
   }
 
   Future<void> _onSwipeLeft(app_media.Media media) async {
@@ -93,32 +87,28 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
       }
     }
 
-    setState(() {
-      _lastSwipedMedia = updatedMedia;
-      _lastAction = 'delete';
-    });
+    ref.read(swipeHistoryProvider.notifier).state = SwipeAction(updatedMedia, 'delete');
     ref.read(swipeCardStateProvider.notifier).removeFirst();
   }
 
   Future<void> _onUndo() async {
-    if (_lastSwipedMedia == null || _lastAction == null) return;
+    final lastAction = ref.read(swipeHistoryProvider);
+    if (lastAction == null) return;
 
     final dbHelper = ref.read(databaseHelperProvider);
-    final lastSwiped = _lastSwipedMedia!;
     app_media.Media mediaToRestore;
 
-    if (_lastAction == 'delete') {
-      mediaToRestore = lastSwiped.copyWith(setDeletedAtToNull: true);
-    } else if (_lastAction == 'album') {
-      mediaToRestore = lastSwiped.copyWith(setAlbumIdToNull: true);
+    if (lastAction.action == 'delete') {
+      mediaToRestore = lastAction.media.copyWith(setDeletedAtToNull: true);
+    } else if (lastAction.action == 'album') {
+      mediaToRestore = lastAction.media.copyWith(setAlbumIdToNull: true);
     } else {
       return;
     }
 
     await dbHelper.updateMedia(mediaToRestore);
     ref.read(swipeCardStateProvider.notifier).undo(mediaToRestore);
-
-    setState(() { _lastSwipedMedia = null; _lastAction = null; });
+    ref.read(swipeHistoryProvider.notifier).state = null; // Clear history after undo
   }
 
   Future<void> _onSwipeDown(app_media.Media media) async {
@@ -134,8 +124,9 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
           final updatedMedia = media.copyWith(albumId: albumId);
           await dbHelper.updateMedia(updatedMedia);
 
-          setState(() { _lastSwipedMedia = updatedMedia; _lastAction = 'album'; });
+          ref.read(swipeHistoryProvider.notifier).state = SwipeAction(updatedMedia, 'album');
           if (context.mounted) Navigator.pop(context);
+          _swiperController.swipe(CardSwiperDirection.bottom);
         },
       ),
     );
@@ -167,7 +158,14 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
               ),
               Expanded(
                 child: GestureDetector(
+                  onVerticalDragUpdate: (details) {
+                    // This gesture detector is only for the visual indicator for "undo"
+                    if (details.delta.dy < -5) { // Swiping up
+                      _dragPosition.value = Offset(0, details.localPosition.dy - (MediaQuery.of(context).size.height / 3));
+                    }
+                  },
                   onVerticalDragEnd: (details) {
+                    _dragPosition.value = Offset.zero;
                     if (details.primaryVelocity != null && details.primaryVelocity! < -500) {
                       _onUndo();
                     }
@@ -177,6 +175,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
                     cardsCount: mediaList.length,
                     onSwipe: _onSwipe,
                     onDrag: (details, offset) => _dragPosition.value = offset,
+                    allowedSwipeDirection: const AllowedSwipeDirection.symmetric(horizontal: true, vertical: true),
                     duration: const Duration(milliseconds: 200),
                     backCardOffset: const Offset(0, 20),
                     scale: 0.9,

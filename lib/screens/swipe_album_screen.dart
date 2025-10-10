@@ -21,9 +21,6 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
   final CardSwiperController _swiperController = CardSwiperController();
   final ValueNotifier<Offset> _dragPosition = ValueNotifier(Offset.zero);
 
-  app_media.Media? _lastSwipedMedia;
-  String? _lastAction;
-
   final Map<String, File> _fileCache = {};
   bool _isPreloading = false;
 
@@ -71,11 +68,8 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
   }
 
   void _onSwipeRight() {
+    ref.read(swipeHistoryProvider.notifier).state = null;
     ref.read(swipeCardStateProvider.notifier).removeFirst();
-    setState(() {
-      _lastSwipedMedia = null;
-      _lastAction = null;
-    });
   }
 
   Future<void> _onSwipeLeft(app_media.Media media) async {
@@ -83,24 +77,20 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
     final updatedMedia = media.copyWith(albumId: widget.albumId);
     await dbHelper.updateMedia(updatedMedia);
 
-    setState(() {
-      _lastSwipedMedia = updatedMedia;
-      _lastAction = 'add';
-    });
+    ref.read(swipeHistoryProvider.notifier).state = SwipeAction(updatedMedia, 'add');
     ref.read(swipeCardStateProvider.notifier).removeFirst();
   }
 
   Future<void> _onUndo() async {
-    if (_lastSwipedMedia == null || _lastAction == null) return;
+    final lastAction = ref.read(swipeHistoryProvider);
+    if (lastAction == null) return;
 
     final dbHelper = ref.read(databaseHelperProvider);
-    final lastSwiped = _lastSwipedMedia!;
-    final mediaToRestore = lastSwiped.copyWith(setAlbumIdToNull: true);
+    final mediaToRestore = lastAction.media.copyWith(setAlbumIdToNull: true);
 
     await dbHelper.updateMedia(mediaToRestore);
     ref.read(swipeCardStateProvider.notifier).undo(mediaToRestore);
-
-    setState(() { _lastSwipedMedia = null; _lastAction = null; });
+    ref.read(swipeHistoryProvider.notifier).state = null;
   }
 
   Future<void> _onSwipeDown(app_media.Media media) async {
@@ -118,8 +108,9 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
           final updatedMedia = media.copyWith(albumId: newAlbumId);
           await dbHelper.updateMedia(updatedMedia);
 
-          setState(() { _lastSwipedMedia = updatedMedia; _lastAction = 'move'; });
+          ref.read(swipeHistoryProvider.notifier).state = SwipeAction(updatedMedia, 'move');
           if (context.mounted) Navigator.pop(context);
+          _swiperController.swipe(CardSwiperDirection.bottom);
         },
       ),
     );
@@ -155,6 +146,7 @@ class _SwipeAlbumScreenState extends ConsumerState<SwipeAlbumScreen> {
               cardsCount: mediaList.length,
               onSwipe: _onSwipe,
               onDrag: (details, offset) => _dragPosition.value = offset,
+              allowedSwipeDirection: const AllowedSwipeDirection.symmetric(horizontal: true, vertical: true),
               duration: const Duration(milliseconds: 200),
               backCardOffset: const Offset(0, 20),
               scale: 0.9,

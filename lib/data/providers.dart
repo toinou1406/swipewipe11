@@ -1,13 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:storage_space/storage_space.dart'; // Replaced disk_space
+import 'package:storage_space/storage_space.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'package:swipewipe10/data/database_helper.dart';
 import 'package:swipewipe10/data/media_repository.dart';
 import 'package:swipewipe10/models/album.dart';
 import 'package:swipewipe10/models/media.dart';
+
+// --- Action History Provider ---
+class SwipeAction {
+  final Media media;
+  final String action; // 'delete' or 'album'
+  SwipeAction(this.media, this.action);
+}
+final swipeHistoryProvider = StateProvider<SwipeAction?>((ref) => null);
+
 
 // --- Database and Repository Providers ---
 final databaseHelperProvider = Provider<DatabaseHelper>((ref) {
@@ -29,9 +38,7 @@ final sharedPreferencesProvider = FutureProvider<SharedPreferences>((ref) async 
 });
 
 final storageStatsProvider = FutureProvider<Map<String, double>>((ref) async {
-  // Use the new, more reliable package
   StorageSpace storage = await getStorageSpace;
-
   return {
     'totalSpace': storage.total.gigabytes,
     'usedSpace': storage.used.gigabytes,
@@ -51,10 +58,6 @@ final lastVisitedAlbumProvider = FutureProvider<Album?>((ref) async {
   return albums.isNotEmpty ? albums.first : null;
 });
 
-final unsortedMediaProvider = FutureProvider<List<Media>>((ref) {
-  return ref.watch(databaseHelperProvider).readUnsortedMedia(limit: 50);
-});
-
 final permissionStatusProvider = FutureProvider<PermissionState>((ref) async {
   return PhotoManager.requestPermissionExtend();
 });
@@ -64,32 +67,14 @@ final mediaSyncProvider = FutureProvider<void>((ref) async {
   await mediaRepo.syncMediaWithDatabase();
 });
 
-// --- State Management Notifiers (New Riverpod 2.x+ Syntax) ---
-
-final albumListProvider = AsyncNotifierProvider<AlbumListNotifier, List<Album>>(AlbumListNotifier.new);
-
-class AlbumListNotifier extends AsyncNotifier<List<Album>> {
-  @override
-  Future<List<Album>> build() async {
-    return ref.watch(databaseHelperProvider).readAllAlbums();
-  }
-
-  Future<void> updateAlbumName(int id, String newName) async {
-    final dbHelper = ref.read(databaseHelperProvider);
-    final albums = await dbHelper.readAllAlbums();
-    final albumToUpdate = albums.firstWhere((a) => a.id == id);
-    await dbHelper.updateAlbum(albumToUpdate.copyWith(name: newName));
-    ref.invalidateSelf();
-    await future;
-  }
-}
+// --- State Management Notifiers ---
 
 final swipeCardStateProvider = AsyncNotifierProvider<SwipeNotifier, List<Media>>(SwipeNotifier.new);
 
 class SwipeNotifier extends AsyncNotifier<List<Media>> {
   int _page = 0;
   bool _isLoading = false;
-  static const _pageSize = 20;
+  static const int _pageSize = 20;
 
   @override
   Future<List<Media>> build() async {
@@ -98,7 +83,7 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
   }
 
   Future<List<Media>> _fetchNextPage() async {
-    if (_isLoading) return state.value ?? [];
+    if (_isLoading) return []; // Prevent concurrent fetches
     _isLoading = true;
 
     final dbHelper = ref.read(databaseHelperProvider);
@@ -109,26 +94,32 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
     return newMedia;
   }
 
-  Future<void> loadMore() async {
+  Future<void> _loadMore() async {
     final newMedia = await _fetchNextPage();
     if (newMedia.isNotEmpty) {
-      state = AsyncData([...state.value!, ...newMedia]);
+      final currentState = state.value ?? [];
+      // --- CRITICAL FIX: Ensure photo uniqueness to prevent duplicates ---
+      final currentIds = currentState.map((e) => e.id).toSet();
+      final uniqueNewMedia = newMedia.where((e) => !currentIds.contains(e.id)).toList();
+      state = AsyncData([...currentState, ...uniqueNewMedia]);
     }
   }
 
   void removeFirst() {
-    if (state.value != null && state.value!.isNotEmpty) {
-      state = AsyncData(state.value!.sublist(1));
-      // Pre-fetch if we are getting to the end of the list
-      if (state.value!.length < 5) {
-        loadMore();
+    final currentList = state.value;
+    if (currentList != null && currentList.isNotEmpty) {
+      state = AsyncData(currentList.sublist(1));
+      // Pre-fetch next page if we are running low on cards
+      if (currentList.length < 10) {
+        _loadMore();
       }
     }
   }
 
   void undo(Media media) {
-     if (state.value != null) {
-      state = AsyncData([media, ...state.value!]);
+    final currentList = state.value;
+     if (currentList != null) {
+      state = AsyncData([media, ...currentList]);
     }
   }
 }
