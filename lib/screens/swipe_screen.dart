@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:swipewipe10/data/providers.dart';
@@ -20,6 +21,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
 
   final Map<String, File> _fileCache = {};
   bool _isPreloading = false;
+  final CardSwiperController _swiperController = CardSwiperController();
 
   @override
   void didChangeDependencies() {
@@ -27,9 +29,15 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     _preloadNextMediaFiles();
   }
 
+  @override
+  void dispose() {
+    _swiperController.dispose();
+    super.dispose();
+  }
+
   Future<void> _preloadNextMediaFiles({int count = 5}) async {
     if (_isPreloading) return;
-    setState(() { _isPreloading = true; });
+    if (mounted) setState(() { _isPreloading = true; });
 
     final mediaList = ref.read(swipeCardStateProvider);
     final upcomingMedia = mediaList.take(count);
@@ -49,23 +57,26 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     }
   }
 
-  void _handleSwipe(SwipeDirection direction, app_media.Media media) {
+  bool _onSwipe(int previousIndex, int? currentIndex, CardSwiperDirection direction) {
+    final media = ref.read(swipeCardStateProvider)[previousIndex];
+
     switch (direction) {
-      case SwipeDirection.right:
+      case CardSwiperDirection.right:
         _onSwipeRight();
         break;
-      case SwipeDirection.left:
+      case CardSwiperDirection.left:
         _onSwipeLeft(media);
         break;
-      case SwipeDirection.up:
+      case CardSwiperDirection.top:
         _onSwipeUp();
         break;
-      case SwipeDirection.down:
+      case CardSwiperDirection.bottom:
         _onSwipeDown(media);
         break;
-      case SwipeDirection.none:
+      case CardSwiperDirection.none:
         break;
     }
+    return true;
   }
 
   void _onSwipeRight() {
@@ -167,33 +178,31 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
             ),
           ),
           Expanded(
-            child: _isPreloading && mediaList.isNotEmpty && _fileCache.isEmpty
+            child: (_isPreloading && mediaList.isNotEmpty && _fileCache.isEmpty) || (mediaList.isNotEmpty && _fileCache[mediaList.first.originalPath] == null)
                 ? const Center(child: CircularProgressIndicator())
                 : mediaList.isEmpty
                     ? const Center(child: Text('No more media to sort!'))
                     : Padding(
                       padding: const EdgeInsets.all(16.0),
-                      child: Stack(
-                          alignment: Alignment.center,
-                          children: List.generate(
-                            mediaList.take(3).length,
-                            (index) {
-                              final media = mediaList[index];
-                              final file = _fileCache[media.originalPath];
-                              if (file == null) return const SizedBox.shrink();
-
-                              return Transform.translate(
-                                offset: Offset(0, 10.0 * index),
-                                child: MediaCard(
-                                  mediaFile: file,
-                                  mediaType: media.mediaType,
-                                  isTopCard: index == 0,
-                                  onSwiped: (direction) => _handleSwipe(direction, media),
-                                ),
-                              );
-                            },
-                          ).reversed.toList(),
-                        ),
+                      child: CardSwiper(
+                        controller: _swiperController,
+                        cardsCount: mediaList.length,
+                        onSwipe: _onSwipe,
+                        duration: const Duration(milliseconds: 150),
+                        backCardOffset: const Offset(0, 20),
+                        scale: 0.9,
+                        cardBuilder: (context, index, percentThresholdX, percentThresholdY) {
+                          final media = mediaList[index];
+                          final file = _fileCache[media.originalPath];
+                          if (file == null) {
+                            return const Center(child: CircularProgressIndicator());
+                          }
+                          return MediaCard(
+                            mediaFile: file,
+                            mediaType: media.mediaType,
+                          );
+                        },
+                      ),
                     ),
           ),
         ],
