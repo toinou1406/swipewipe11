@@ -16,31 +16,28 @@ class SwipeScreen extends ConsumerStatefulWidget {
 }
 
 class _SwipeScreenState extends ConsumerState<SwipeScreen> {
+  final CardSwiperController _swiperController = CardSwiperController();
+  final ValueNotifier<Offset> _dragPosition = ValueNotifier(Offset.zero);
+
   app_media.Media? _lastSwipedMedia;
   String? _lastAction;
 
   final Map<String, File> _fileCache = {};
   bool _isPreloading = false;
-  final CardSwiperController _swiperController = CardSwiperController();
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _preloadNextMediaFiles();
-  }
 
   @override
   void dispose() {
     _swiperController.dispose();
+    _dragPosition.dispose();
     super.dispose();
   }
 
-  Future<void> _preloadNextMediaFiles({int count = 5}) async {
+  Future<void> _preloadNextMediaFiles() async {
     if (_isPreloading) return;
     if (mounted) setState(() { _isPreloading = true; });
 
-    final mediaList = ref.read(swipeCardStateProvider);
-    final upcomingMedia = mediaList.take(count);
+    final mediaList = ref.read(swipeCardStateProvider).value ?? [];
+    final upcomingMedia = mediaList.take(5);
 
     for (final media in upcomingMedia) {
       if (_fileCache.containsKey(media.originalPath)) continue;
@@ -57,33 +54,30 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     }
   }
 
-  bool _onSwipe(int previousIndex, int? currentIndex, CardSwiperDirection direction) {
-    final media = ref.read(swipeCardStateProvider)[previousIndex];
+  Future<bool> _onSwipe(int previousIndex, int? currentIndex, CardSwiperDirection direction) async {
+    _dragPosition.value = Offset.zero; // Reset position after swipe
+    final media = ref.read(swipeCardStateProvider).value![previousIndex];
 
-    switch (direction) {
-      case CardSwiperDirection.right:
-        _onSwipeRight();
-        break;
-      case CardSwiperDirection.left:
-        _onSwipeLeft(media);
-        break;
-      case CardSwiperDirection.top:
-        _onSwipeUp();
-        break;
-      case CardSwiperDirection.bottom:
-        _onSwipeDown(media);
-        break;
-      case CardSwiperDirection.none:
-        break;
+    if (direction == CardSwiperDirection.right) {
+      _onSwipeRight();
+    } else if (direction == CardSwiperDirection.left) {
+      await _onSwipeLeft(media);
+    } else if (direction == CardSwiperDirection.bottom) {
+      await _onSwipeDown(media);
     }
+    // The undo (top swipe) is handled by a separate gesture detector
     return true;
   }
 
   void _onSwipeRight() {
-    ref.read(swipeCardStateProvider.notifier).removeCard();
+    ref.read(swipeCardStateProvider.notifier).removeFirst();
+    setState(() {
+      _lastSwipedMedia = null; // No undo for "keep"
+      _lastAction = null;
+    });
   }
 
-  void _onSwipeLeft(app_media.Media media) async {
+  Future<void> _onSwipeLeft(app_media.Media media) async {
     final dbHelper = ref.read(databaseHelperProvider);
     final updatedMedia = media.copyWith(deletedAt: DateTime.now());
     await dbHelper.updateMedia(updatedMedia);
@@ -103,17 +97,11 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
       _lastSwipedMedia = updatedMedia;
       _lastAction = 'delete';
     });
-    ref.read(swipeCardStateProvider.notifier).removeCard();
+    ref.read(swipeCardStateProvider.notifier).removeFirst();
   }
 
-  void _onSwipeUp() async {
-    if (_lastSwipedMedia == null || _lastAction == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No recent action to undo.')),
-      );
-      return;
-    }
+  Future<void> _onUndo() async {
+    if (_lastSwipedMedia == null || _lastAction == null) return;
 
     final dbHelper = ref.read(databaseHelperProvider);
     final lastSwiped = _lastSwipedMedia!;
@@ -130,82 +118,92 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     await dbHelper.updateMedia(mediaToRestore);
     ref.read(swipeCardStateProvider.notifier).undo(mediaToRestore);
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Action undone.')));
-
     setState(() { _lastSwipedMedia = null; _lastAction = null; });
   }
 
-  void _onSwipeDown(app_media.Media media) async {
+  Future<void> _onSwipeDown(app_media.Media media) async {
     final albums = await ref.read(albumsProvider.future);
     if (!mounted) return;
-    showModalBottomSheet(
+    await showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (context) {
-        return SwipeMenu(
-          albums: albums,
-          onAlbumSelected: (albumId) async {
-            final dbHelper = ref.read(databaseHelperProvider);
-            final updatedMedia = media.copyWith(albumId: albumId);
-            await dbHelper.updateMedia(updatedMedia);
+      builder: (context) => SwipeMenu(
+        albums: albums,
+        onAlbumSelected: (albumId) async {
+          final dbHelper = ref.read(databaseHelperProvider);
+          final updatedMedia = media.copyWith(albumId: albumId);
+          await dbHelper.updateMedia(updatedMedia);
 
-            setState(() { _lastSwipedMedia = updatedMedia; _lastAction = 'album'; });
-            ref.read(swipeCardStateProvider.notifier).removeCard();
-            if (context.mounted) Navigator.pop(context);
-          },
-        );
-      },
+          setState(() { _lastSwipedMedia = updatedMedia; _lastAction = 'album'; });
+          if (context.mounted) Navigator.pop(context);
+        },
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final mediaList = ref.watch(swipeCardStateProvider);
-    ref.listen(swipeCardStateProvider, (previous, next) {
-      _preloadNextMediaFiles();
+    final mediaListAsync = ref.watch(swipeCardStateProvider);
+
+    ref.listen(swipeCardStateProvider, (prev, next) {
+      if(next.value != null && next.value!.isNotEmpty) {
+        _preloadNextMediaFiles();
+      }
     });
 
     return Scaffold(
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: Row(
-              children: [
-                Text('Photos to sort: ${mediaList.length}', style: Theme.of(context).textTheme.bodyMedium),
-              ],
-            ),
-          ),
-          Expanded(
-            child: (_isPreloading && mediaList.isNotEmpty && _fileCache.isEmpty) || (mediaList.isNotEmpty && _fileCache[mediaList.first.originalPath] == null)
-                ? const Center(child: CircularProgressIndicator())
-                : mediaList.isEmpty
-                    ? const Center(child: Text('No more media to sort!'))
-                    : Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: CardSwiper(
-                        controller: _swiperController,
-                        cardsCount: mediaList.length,
-                        onSwipe: _onSwipe,
-                        duration: const Duration(milliseconds: 150),
-                        backCardOffset: const Offset(0, 20),
-                        scale: 0.9,
-                        cardBuilder: (context, index, percentThresholdX, percentThresholdY) {
-                          final media = mediaList[index];
-                          final file = _fileCache[media.originalPath];
-                          if (file == null) {
-                            return const Center(child: CircularProgressIndicator());
-                          }
+      body: mediaListAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (err, stack) => Center(child: Text('Error: $err')),
+        data: (mediaList) {
+          if (mediaList.isEmpty) {
+            return const Center(child: Text('No more media to sort!'));
+          }
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                child: Text('Photos to sort: ${mediaList.length}', style: Theme.of(context).textTheme.bodyMedium),
+              ),
+              Expanded(
+                child: GestureDetector(
+                  onVerticalDragEnd: (details) {
+                    if (details.primaryVelocity != null && details.primaryVelocity! < -500) {
+                      _onUndo();
+                    }
+                  },
+                  child: CardSwiper(
+                    controller: _swiperController,
+                    cardsCount: mediaList.length,
+                    onSwipe: _onSwipe,
+                    onDrag: (details, offset) => _dragPosition.value = offset,
+                    duration: const Duration(milliseconds: 200),
+                    backCardOffset: const Offset(0, 20),
+                    scale: 0.9,
+                    cardBuilder: (context, index, percentThresholdX, percentThresholdY) {
+                      final media = mediaList[index];
+                      final file = _fileCache[media.originalPath];
+                      if (file == null) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      return ValueListenableBuilder<Offset>(
+                        valueListenable: _dragPosition,
+                        builder: (context, position, child) {
                           return MediaCard(
                             mediaFile: file,
                             mediaType: media.mediaType,
+                            position: index == 0 ? position : Offset.zero,
+                            angle: index == 0 ? (position.dx / (MediaQuery.of(context).size.width / 2) * 0.2) : 0,
                           );
                         },
-                      ),
-                    ),
-          ),
-        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

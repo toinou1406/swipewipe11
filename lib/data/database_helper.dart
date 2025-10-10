@@ -129,13 +129,14 @@ CREATE TABLE medias (
     return media.copyWith(id: id);
   }
 
-  Future<List<Media>> readUnsortedMedia({int limit = 20}) async {
+  Future<List<Media>> readUnsortedMedia({int limit = 20, int offset = 0}) async {
     final db = await instance.database;
     final result = await db.query(
       'medias',
       where: 'album_id IS NULL AND deleted_at IS NULL',
-      orderBy: 'id DESC', // Assuming newer media have higher IDs
+      orderBy: 'id DESC',
       limit: limit,
+      offset: offset,
     );
     return result.map((json) => Media.fromMap(json)).toList();
   }
