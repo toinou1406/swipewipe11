@@ -127,11 +127,16 @@ class _MediaCardState extends State<MediaCard> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
-    return Transform.translate(
-      offset: _currentPosition,
-      child: Transform.rotate(
-        angle: _rotationAngle,
-        child: _buildCardContent(),
+    return GestureDetector(
+      onPanStart: _onPanStart,
+      onPanUpdate: _onPanUpdate,
+      onPanEnd: _onPanEnd,
+      child: Transform.translate(
+        offset: _currentPosition,
+        child: Transform.rotate(
+          angle: _rotationAngle,
+          child: _buildCardContent(),
+        ),
       ),
     );
   }

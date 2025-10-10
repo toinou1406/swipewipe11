@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:swipewipe10/data/providers.dart';
 import 'package:swipewipe10/screens/main_navigation_view.dart';
 import 'package:swipewipe10/screens/permission_screen.dart';
@@ -43,9 +44,8 @@ class AppStartupWrapper extends ConsumerWidget {
       loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (err, stack) => Scaffold(body: Center(child: Text('Error checking permissions: $err'))),
       data: (permission) {
-        // Use the null-aware operator `?.` to safely access `hasAccess`.
-        // This handles the case where `permission` might be null.
-        if (permission?.hasAccess == true) {
+        // Check if permission grants access (authorized or limited)
+        if (permission.hasAccess) {
           // If permission is granted, move to the media sync phase
           return const MediaSyncWrapper();
         } else {

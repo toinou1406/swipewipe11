@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:storage_space/storage_space.dart'; // Replaced disk_space
 import 'package:photo_manager/photo_manager.dart';
@@ -30,11 +31,18 @@ final sharedPreferencesProvider = FutureProvider<SharedPreferences>((ref) async 
 
 final storageStatsProvider = FutureProvider<Map<String, double>>((ref) async {
   // Use the new, more reliable package
-  StorageSpace storage = await getStorageSpace;
+  // lowOnSpaceThreshold: 2GB in bytes, fractionDigits: 1 for human-readable values
+  StorageSpace storage = await getStorageSpace(
+    lowOnSpaceThreshold: 2 * 1024 * 1024 * 1024, // 2GB threshold
+    fractionDigits: 1,
+  );
 
+  // Convert bytes to gigabytes (1 GB = 1024^3 bytes)
+  const bytesPerGigabyte = 1024 * 1024 * 1024;
+  
   return {
-    'totalSpace': storage.total.gigabytes,
-    'usedSpace': storage.used.gigabytes,
+    'totalSpace': storage.total / bytesPerGigabyte,
+    'usedSpace': storage.used / bytesPerGigabyte,
     'freedSpaceThisMonth': 2.3, // Mocked as per original plan
   };
 });
