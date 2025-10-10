@@ -30,6 +30,7 @@ dependencies:
   # UI
   google_fonts: ^6.2.1
   cupertino_icons: ^1.0.8
+  flutter_card_swiper: ^7.0.1
 
 dev_dependencies:
   flutter_test:
