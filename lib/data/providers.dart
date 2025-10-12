@@ -291,11 +291,7 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
             });
         }
         
-        // Utiliser un délai court pour permettre à l'animation de se terminer
-        // avant de mettre à jour l'état, ce qui évite les problèmes d'affichage
-        await Future.delayed(const Duration(milliseconds: 150));
-        
-        // Mettre à jour l'état avec la nouvelle liste
+        // Mettre à jour l'état IMMÉDIATEMENT avec la nouvelle liste
         state = AsyncData(newList);
         
         debugPrint('Liste APRÈS suppression (3 premiers):');
@@ -303,7 +299,7 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           debugPrint('  [$i]: ${newList[i].originalPath}');
         }
         debugPrint('=== FIN SUPPRESSION ===');
-        
+
         // Vérifier si nous devons charger plus de médias
         if (newList.length < 10) {
           // Utiliser un délai pour éviter de bloquer l'interface
@@ -314,9 +310,6 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
       } else {
         // Si c'est le dernier élément, vider la liste et charger plus de médias
         state = const AsyncData([]);
-        
-        // Utiliser un délai court pour permettre à l'animation de se terminer
-        await Future.delayed(const Duration(milliseconds: 150));
         
         // Charger plus de médias immédiatement
         _syncAndReloadIfEmpty();
@@ -357,12 +350,11 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
             timeout: const Duration(seconds: 2)
           );
           
-          // Utiliser un délai court pour permettre à l'animation de se terminer
-          await Future.delayed(const Duration(milliseconds: 50));
-          
           // Créer une nouvelle liste pour éviter les problèmes de référence
           // Utiliser toList() pour créer une copie complètement nouvelle
           final newList = [media, ...currentList.toList()];
+
+          // Mettre à jour l'état IMMÉDIATEMENT
           state = AsyncData(newList);
           
           // Précharger les images suivantes pour garantir une transition fluide

@@ -156,23 +156,22 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
       debugPrint('Photo à previousIndex ($previousIndex): ${mediaList[previousIndex].originalPath}');
     }
     
-    // IMPORTANT: Après analyse des logs, le previousIndex du CardSwiper ne correspond PAS
-    // à l'index dans notre liste de données. La carte swipée est TOUJOURS à l'index 0.
-    // Le previousIndex semble être un compteur interne du CardSwiper.
-    final media = mediaList[0];
-    debugPrint('Photo qui sera supprimée (index 0): ${media.originalPath}');
-    
-    debugPrint('Swipe détecté - Direction: $direction, Media sélectionné: ${media.originalPath}');
-    
+    // On se fie au `previousIndex` fourni par CardSwiper.
+    // Le bug précédent venait probablement du fait qu'on supprimait toujours l'index 0,
+    // ce qui, combiné à un délai, créait une désynchronisation.
+    if (previousIndex >= mediaList.length) {
+      debugPrint('Swipe ignoré : index $previousIndex hors des limites de la liste (taille ${mediaList.length})');
+      return false; // Index hors limites, on annule le swipe.
+    }
+
+    final media = mediaList[previousIndex];
+    debugPrint('Photo qui sera traitée (index $previousIndex): ${media.originalPath}');
+    debugPrint('Swipe détecté - Direction: $direction');
+
     // Précharger les prochaines images en arrière-plan (non-bloquant)
-    if (mediaList.length > 1) {
-      // Identifier les 3 prochaines images à précharger (indices 1, 2, 3)
-      final nextMediaItems = <app_media.Media>[];
-      for (int i = 1; i <= 3; i++) {
-        if (i < mediaList.length) {
-          nextMediaItems.add(mediaList[i]);
-        }
-      }
+    if (mediaList.length > previousIndex + 1) {
+      // Identifier les 3 prochaines images à précharger
+      final nextMediaItems = mediaList.sublist(previousIndex + 1).take(3).toList();
       
       // Précharger en arrière-plan sans bloquer le swipe
       if (nextMediaItems.isNotEmpty) {
@@ -192,21 +191,20 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
         });
       }
     }
-    
-      try {
-        // Exécuter l'action immédiatement sans délai
-        // Toujours utiliser l'index 0 car la carte swipée est toujours au sommet de la pile
-        if (direction == CardSwiperDirection.right) {
-          await _onSwipeRight(0);
-        } else if (direction == CardSwiperDirection.left) {
-          await _onSwipeLeft(media, 0);
-        } else if (direction == CardSwiperDirection.bottom) {
-          // Pour le swipe vers le bas (album), on affiche le menu mais on ne supprime pas encore
-          // La suppression se fera quand l'utilisateur sélectionnera un album
-          await _onSwipeDown(media, 0);
-          // Retourner false pour annuler l'animation du swipe
-          return false;
-        }
+
+    try {
+      // Exécuter l'action avec l'index correct
+      if (direction == CardSwiperDirection.right) {
+        await _onSwipeRight(previousIndex);
+      } else if (direction == CardSwiperDirection.left) {
+        await _onSwipeLeft(media, previousIndex);
+      } else if (direction == CardSwiperDirection.bottom) {
+        // Pour le swipe vers le bas (album), on affiche le menu mais on ne supprime pas encore
+        // La suppression se fera quand l'utilisateur sélectionnera un album
+        await _onSwipeDown(media, previousIndex);
+        // Retourner false pour annuler l'animation du swipe
+        return false;
+      }
         
         // Précharger plus d'images en arrière-plan
         _preloadNextMediaFiles();
