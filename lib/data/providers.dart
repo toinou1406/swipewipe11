@@ -136,9 +136,9 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
     _isLoading = true;
     
     try {
-      final mediaRepo = ref.read(mediaRepositoryProvider);
-      // Utiliser la nouvelle méthode qui charge rapidement les médias initiaux
-      final initialMedia = await mediaRepo.getInitialMedia(limit: _pageSize);
+      // On utilise directement le dbHelper pour le chargement initial
+      final dbHelper = ref.read(databaseHelperProvider);
+      final initialMedia = await dbHelper.readUnsortedMedia(limit: _pageSize);
       
       // Mettre à jour les compteurs
       _page = 1; // On a déjà chargé la première page
@@ -147,11 +147,6 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
       // Enregistrer les chemins pour éviter les doublons
       for (final media in initialMedia) {
         _loadedPaths.add(media.originalPath);
-      }
-      
-      // Démarrer la synchronisation en arrière-plan pour les médias suivants
-      if (initialMedia.isNotEmpty) {
-        mediaRepo.startBackgroundSync();
       }
       
       return initialMedia;
@@ -281,14 +276,12 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           final mediaRepo = ref.read(mediaRepositoryProvider);
           final nextItems = newList.take(3).toList();
           
-          // Précharger en arrière-plan sans bloquer l'interface
-          mediaRepo.getFilesForMediaBatch(nextItems, timeout: const Duration(seconds: 5))
-            .then((_) {
-              debugPrint('Préchargement des 3 prochaines images terminé');
-            })
-            .catchError((e) {
-              debugPrint('Erreur de préchargement: ${e.toString()}');
+          // Précharger en arrière-plan sans bloquer l'interface (fire-and-forget)
+          for (final item in nextItems) {
+            mediaRepo.getFileForMedia(item).catchError((e) {
+              debugPrint('Erreur de préchargement en arrière-plan: ${e.toString()}');
             });
+          }
         }
         
         // Mettre à jour l'état IMMÉDIATEMENT avec la nouvelle liste
@@ -345,10 +338,7 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           
           // Précharger l'image que nous allons ajouter pour éviter les saccades
           final mediaRepo = ref.read(mediaRepositoryProvider);
-          await mediaRepo.getFileForMediaWithTimeout(
-            media,
-            timeout: const Duration(seconds: 2)
-          );
+          await mediaRepo.getFileForMedia(media);
           
           // Créer une nouvelle liste pour éviter les problèmes de référence
           // Utiliser toList() pour créer une copie complètement nouvelle
@@ -361,13 +351,11 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           Future.delayed(const Duration(milliseconds: 200), () {
             if (newList.length >= 3) {
               final nextItems = newList.take(3).toList();
-              mediaRepo.getFilesForMediaBatch(nextItems, timeout: const Duration(seconds: 5))
-                .then((_) {
-                  debugPrint('Préchargement après undo terminé');
-                })
-                .catchError((e) {
+              for (final item in nextItems) {
+                mediaRepo.getFileForMedia(item).catchError((e) {
                   debugPrint('Erreur de préchargement après undo: ${e.toString()}');
                 });
+              }
             }
           });
         }
@@ -397,14 +385,11 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
     state = const AsyncLoading();
     
     try {
-      // Pour un rafraîchissement, on utilise la méthode rapide
-      final mediaRepo = ref.read(mediaRepositoryProvider);
-      
-      // Démarrer une synchronisation en arrière-plan
-      mediaRepo.startBackgroundSync();
+      // Pour un rafraîchissement, on utilise directement le dbHelper
+      final dbHelper = ref.read(databaseHelperProvider);
       
       // Charger rapidement les médias initiaux
-      final initialMedia = await mediaRepo.getInitialMedia(limit: _pageSize);
+      final initialMedia = await dbHelper.readUnsortedMedia(limit: _pageSize);
       
       // Mettre à jour les compteurs
       _page = 1;

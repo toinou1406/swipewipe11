@@ -59,35 +59,19 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
       final List<app_media.Media> priorityItems = itemsToPreload.take(3).toList();
       final List<app_media.Media> regularItems = itemsToPreload.length > 3 ? itemsToPreload.sublist(3) : <app_media.Media>[];
       
-      // Charger d'abord les images prioritaires
       final mediaRepo = ref.read(mediaRepositoryProvider);
       
-      if (priorityItems.isNotEmpty) {
-        final priorityFiles = await mediaRepo.getFilesForMediaBatch(
-          priorityItems,
-          timeout: const Duration(seconds: 5) // Timeout court pour les images prioritaires
-        );
-        
-        // Mettre à jour le cache immédiatement avec les fichiers prioritaires
-        if (mounted) {
-          setState(() {
-            _fileCache.addAll(priorityFiles);
-          });
-        }
-      }
-      
-      // Ensuite charger les images régulières en arrière-plan
-      if (regularItems.isNotEmpty) {
-        final regularFiles = await mediaRepo.getFilesForMediaBatch(
-          regularItems,
-          timeout: const Duration(seconds: 20) // Timeout plus long pour les autres images
-        );
-        
-        // Mettre à jour le cache avec les fichiers réguliers
-        if (mounted) {
-          setState(() {
-            _fileCache.addAll(regularFiles);
-          });
+      // Charger les fichiers un par un et les ajouter au cache
+      for (final item in itemsToPreload) {
+        try {
+          final file = await mediaRepo.getFileForMedia(item);
+          if (file != null && mounted) {
+            setState(() {
+              _fileCache[item.originalPath] = file;
+            });
+          }
+        } catch (e) {
+          debugPrint('Erreur de préchargement pour ${item.originalPath}: $e');
         }
       }
       
@@ -177,18 +161,17 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
       if (nextMediaItems.isNotEmpty) {
         final mediaRepo = ref.read(mediaRepositoryProvider);
         // Fire and forget - ne pas attendre
-        mediaRepo.getFilesForMediaBatch(
-          nextMediaItems,
-          timeout: const Duration(seconds: 3)
-        ).then((nextFiles) {
-          if (mounted) {
-            setState(() {
-              _fileCache.addAll(nextFiles);
-            });
-          }
-        }).catchError((e) {
-          debugPrint('Erreur préchargement: $e');
-        });
+        for (final item in nextMediaItems) {
+          mediaRepo.getFileForMedia(item).then((file) {
+            if (file != null && mounted) {
+              setState(() {
+                _fileCache[item.originalPath] = file;
+              });
+            }
+          }).catchError((e) {
+            debugPrint('Erreur préchargement: $e');
+          });
+        }
       }
     }
 
@@ -457,12 +440,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
                         WidgetsBinding.instance.addPostFrameCallback((_) async {
                           try {
                             final mediaRepo = ref.read(mediaRepositoryProvider);
-                            final loadedFile = await mediaRepo.getFileForMediaWithTimeout(
-                              media,
-                              timeout: index == 0 
-                                ? const Duration(seconds: 1)
-                                : const Duration(seconds: 3)
-                            );
+                            final loadedFile = await mediaRepo.getFileForMedia(media);
                             
                             if (loadedFile != null && mounted) {
                               setState(() {
