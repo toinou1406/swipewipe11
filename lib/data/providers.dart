@@ -2,13 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:storage_space/storage_space.dart'; // Replaced disk_space
+import 'package:storage_space/storage_space.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'package:swipewipe10/data/database_helper.dart';
 import 'package:swipewipe10/data/media_repository.dart';
 import 'package:swipewipe10/models/album.dart';
 import 'package:swipewipe10/models/media.dart';
+
+// --- Action History Provider ---
+class SwipeAction {
+  final Media media;
+  final String action; // 'delete' or 'album'
+  SwipeAction(this.media, this.action);
+}
+final swipeHistoryProvider = StateProvider<SwipeAction?>((ref) => null);
+
 
 // --- Database and Repository Providers ---
 final databaseHelperProvider = Provider<DatabaseHelper>((ref) {
@@ -59,10 +68,6 @@ final lastVisitedAlbumProvider = FutureProvider<Album?>((ref) async {
   return albums.isNotEmpty ? albums.first : null;
 });
 
-final unsortedMediaProvider = FutureProvider<List<Media>>((ref) {
-  return ref.watch(databaseHelperProvider).readUnsortedMedia(limit: 50);
-});
-
 final permissionStatusProvider = FutureProvider<PermissionState>((ref) async {
   return PhotoManager.requestPermissionExtend();
 });
@@ -72,23 +77,35 @@ final mediaSyncProvider = FutureProvider<void>((ref) async {
   await mediaRepo.syncMediaWithDatabase();
 });
 
-// --- State Management Notifiers (New Riverpod 2.x+ Syntax) ---
+// --- State Management Notifiers ---
 
 final albumListProvider = AsyncNotifierProvider<AlbumListNotifier, List<Album>>(AlbumListNotifier.new);
 
 class AlbumListNotifier extends AsyncNotifier<List<Album>> {
   @override
   Future<List<Album>> build() async {
-    return ref.watch(databaseHelperProvider).readAllAlbums();
+    final dbHelper = ref.read(databaseHelperProvider);
+    return dbHelper.readAllAlbums();
   }
 
-  Future<void> updateAlbumName(int id, String newName) async {
+  Future<void> updateAlbumName(int albumId, String newName) async {
     final dbHelper = ref.read(databaseHelperProvider);
-    final albums = await dbHelper.readAllAlbums();
-    final albumToUpdate = albums.firstWhere((a) => a.id == id);
-    await dbHelper.updateAlbum(albumToUpdate.copyWith(name: newName));
-    ref.invalidateSelf();
-    await future;
+    final currentAlbums = state.value ?? [];
+    
+    // Find the album to update
+    final albumIndex = currentAlbums.indexWhere((album) => album.id == albumId);
+    if (albumIndex == -1) return;
+    
+    final album = currentAlbums[albumIndex];
+    final updatedAlbum = album.copyWith(name: newName);
+    
+    // Update in database
+    await dbHelper.updateAlbum(updatedAlbum);
+    
+    // Update state
+    final updatedAlbums = [...currentAlbums];
+    updatedAlbums[albumIndex] = updatedAlbum;
+    state = AsyncData(updatedAlbums);
   }
 }
 
@@ -97,46 +114,326 @@ final swipeCardStateProvider = AsyncNotifierProvider<SwipeNotifier, List<Media>>
 class SwipeNotifier extends AsyncNotifier<List<Media>> {
   int _page = 0;
   bool _isLoading = false;
-  static const _pageSize = 20;
+  bool _hasMoreMedia = true; // Flag to track if more media is available
+  static const int _pageSize = 50; // Increased page size for better performance
+  final Set<String> _loadedPaths = {}; // Track loaded media paths to prevent duplicates
+  int _totalMediaCount = 0; // Track total media count for infinite scrolling
 
   @override
   Future<List<Media>> build() async {
     _page = 0;
-    return _fetchNextPage();
+    _loadedPaths.clear();
+    _hasMoreMedia = true;
+    _totalMediaCount = 0;
+    
+    // Utiliser la méthode rapide pour le chargement initial
+    return _fetchInitialMedia();
   }
-
-  Future<List<Media>> _fetchNextPage() async {
-    if (_isLoading) return state.value ?? [];
+  
+  // Méthode rapide pour le premier chargement
+  Future<List<Media>> _fetchInitialMedia() async {
+    if (_isLoading) return [];
     _isLoading = true;
-
-    final dbHelper = ref.read(databaseHelperProvider);
-    final newMedia = await dbHelper.readUnsortedMedia(limit: _pageSize, offset: _page * _pageSize);
-    _page++;
-
-    _isLoading = false;
-    return newMedia;
-  }
-
-  Future<void> loadMore() async {
-    final newMedia = await _fetchNextPage();
-    if (newMedia.isNotEmpty) {
-      state = AsyncData([...state.value!, ...newMedia]);
+    
+    try {
+      final mediaRepo = ref.read(mediaRepositoryProvider);
+      // Utiliser la nouvelle méthode qui charge rapidement les médias initiaux
+      final initialMedia = await mediaRepo.getInitialMedia(limit: _pageSize);
+      
+      // Mettre à jour les compteurs
+      _page = 1; // On a déjà chargé la première page
+      _totalMediaCount = initialMedia.length;
+      
+      // Enregistrer les chemins pour éviter les doublons
+      for (final media in initialMedia) {
+        _loadedPaths.add(media.originalPath);
+      }
+      
+      // Démarrer la synchronisation en arrière-plan pour les médias suivants
+      if (initialMedia.isNotEmpty) {
+        mediaRepo.startBackgroundSync();
+      }
+      
+      return initialMedia;
+    } catch (e) {
+      debugPrint('Error fetching initial media: ${e.toString()}');
+      return [];
+    } finally {
+      _isLoading = false;
     }
   }
 
-  void removeFirst() {
-    if (state.value != null && state.value!.isNotEmpty) {
-      state = AsyncData(state.value!.sublist(1));
-      // Pre-fetch if we are getting to the end of the list
-      if (state.value!.length < 5) {
-        loadMore();
+  Future<List<Media>> _fetchNextPage() async {
+    if (_isLoading || !_hasMoreMedia) return []; // Prevent concurrent fetches or if no more media
+    _isLoading = true;
+
+    try {
+      final dbHelper = ref.read(databaseHelperProvider);
+      final newMedia = await dbHelper.readUnsortedMedia(limit: _pageSize, offset: _page * _pageSize);
+      _page++;
+      
+      // If we got fewer items than requested, we've reached the end
+      if (newMedia.length < _pageSize) {
+        _hasMoreMedia = false;
+        debugPrint('Reached end of media list. Total loaded: ${_totalMediaCount + newMedia.length}');
+      }
+      
+      // Filter out any duplicates that might have been returned from the database
+      final uniqueMedia = <Media>[];
+      for (final media in newMedia) {
+        if (!_loadedPaths.contains(media.originalPath)) {
+          _loadedPaths.add(media.originalPath);
+          uniqueMedia.add(media);
+        }
+      }
+      
+      _totalMediaCount += uniqueMedia.length;
+      debugPrint('Loaded ${uniqueMedia.length} new media items. Total: $_totalMediaCount');
+      
+      return uniqueMedia;
+    } catch (e) {
+      debugPrint('Error fetching media: ${e.toString()}');
+      return [];
+    } finally {
+      _isLoading = false;
+    }
+  }
+
+  // Load more media and add to the current state
+  Future<void> _loadMore() async {
+    if (_isLoading || !_hasMoreMedia) return;
+    
+    debugPrint('Loading more media...');
+    final newMedia = await _fetchNextPage();
+    if (newMedia.isNotEmpty) {
+      final currentState = state.value ?? [];
+      state = AsyncData([...currentState, ...newMedia]);
+      debugPrint('Added ${newMedia.length} more items. Total: ${currentState.length + newMedia.length}');
+    } else if (_hasMoreMedia) {
+      // If we got no new media but still have more, try again with the next page
+      _loadMore();
+    } else {
+      debugPrint('No more media to load');
+      // If we've truly run out of media, try to sync with the device
+      _syncAndReloadIfEmpty();
+    }
+  }
+  
+  // Version publique de _loadMore pour pouvoir l'appeler depuis l'extérieur
+  Future<void> loadMore() async {
+    await _loadMore();
+  }
+
+  // Sync with device and reload if we've run out of media
+  Future<void> _syncAndReloadIfEmpty() async {
+    final currentState = state.value ?? [];
+    if (currentState.isEmpty && !_isLoading) {
+      debugPrint('No media in state, syncing with device...');
+      try {
+        final mediaRepo = ref.read(mediaRepositoryProvider);
+        await mediaRepo.syncMediaWithDatabase();
+        
+        // Reset pagination and try again
+        _page = 0;
+        _hasMoreMedia = true;
+        _loadMore();
+      } catch (e) {
+        debugPrint('Error syncing media: ${e.toString()}');
       }
     }
   }
 
-  void undo(Media media) {
-     if (state.value != null) {
-      state = AsyncData([media, ...state.value!]);
+  Future<void> removeAt(int index) async {
+    final currentList = state.value;
+    if (currentList == null || currentList.isEmpty) {
+      // Si la liste est vide, essayer de charger plus de médias
+      await _loadMore();
+      return;
+    }
+    
+    if (index < 0 || index >= currentList.length) {
+      debugPrint('Index hors limites: $index (liste de taille ${currentList.length})');
+      return;
+    }
+    
+    try {
+      // Sauvegarder l'élément supprimé pour référence
+      final removedMedia = currentList[index];
+      
+      debugPrint('=== SUPPRESSION DEBUG ===');
+      debugPrint('Index à supprimer: $index');
+      debugPrint('Taille de la liste: ${currentList.length}');
+      debugPrint('Élément à supprimer: ${removedMedia.originalPath}');
+      debugPrint('Liste AVANT suppression (3 premiers):');
+      for (int i = 0; i < currentList.length && i < 3; i++) {
+        debugPrint('  [$i]: ${currentList[i].originalPath}');
+      }
+      
+      // Vérifier qu'il y a au moins un élément dans la liste
+      if (currentList.length > 1) {
+        // Créer une nouvelle liste sans l'élément à l'index spécifié
+        final newList = List<Media>.from(currentList);
+        newList.removeAt(index);
+        
+        // Précharger les 3 prochaines images AVANT de mettre à jour l'état
+        // pour garantir une transition fluide
+        if (newList.length >= 3) {
+          final mediaRepo = ref.read(mediaRepositoryProvider);
+          final nextItems = newList.take(3).toList();
+          
+          // Précharger en arrière-plan sans bloquer l'interface
+          mediaRepo.getFilesForMediaBatch(nextItems, timeout: const Duration(seconds: 5))
+            .then((_) {
+              debugPrint('Préchargement des 3 prochaines images terminé');
+            })
+            .catchError((e) {
+              debugPrint('Erreur de préchargement: ${e.toString()}');
+            });
+        }
+        
+        // Utiliser un délai court pour permettre à l'animation de se terminer
+        // avant de mettre à jour l'état, ce qui évite les problèmes d'affichage
+        await Future.delayed(const Duration(milliseconds: 150));
+        
+        // Mettre à jour l'état avec la nouvelle liste
+        state = AsyncData(newList);
+        
+        debugPrint('Liste APRÈS suppression (3 premiers):');
+        for (int i = 0; i < newList.length && i < 3; i++) {
+          debugPrint('  [$i]: ${newList[i].originalPath}');
+        }
+        debugPrint('=== FIN SUPPRESSION ===');
+        
+        // Vérifier si nous devons charger plus de médias
+        if (newList.length < 10) {
+          // Utiliser un délai pour éviter de bloquer l'interface
+          Future.delayed(const Duration(milliseconds: 500), () {
+            _loadMore();
+          });
+        }
+      } else {
+        // Si c'est le dernier élément, vider la liste et charger plus de médias
+        state = const AsyncData([]);
+        
+        // Utiliser un délai court pour permettre à l'animation de se terminer
+        await Future.delayed(const Duration(milliseconds: 150));
+        
+        // Charger plus de médias immédiatement
+        _syncAndReloadIfEmpty();
+      }
+      
+      // Enregistrer l'action pour permettre l'annulation
+      debugPrint('Élément supprimé: ${removedMedia.originalPath}');
+      
+    } catch (e) {
+      debugPrint('Erreur dans removeAt: ${e.toString()}');
+      // En cas d'erreur, essayer de recharger les médias
+      refreshMedia();
+    }
+  }
+
+  Future<void> removeFirst() async {
+    // Appeler removeAt avec l'index 0
+    await removeAt(0);
+  }
+
+  Future<void> undo(Media media) async {
+    try {
+      final currentList = state.value;
+      if (currentList != null) {
+        // Vérifier si le média existe déjà dans la liste pour éviter les doublons
+        final mediaExists = currentList.any((m) => m.originalPath == media.originalPath);
+        
+        if (!mediaExists) {
+          // S'assurer que nous n'ajoutons pas un doublon lors de l'annulation
+          if (!_loadedPaths.contains(media.originalPath)) {
+            _loadedPaths.add(media.originalPath);
+          }
+          
+          // Précharger l'image que nous allons ajouter pour éviter les saccades
+          final mediaRepo = ref.read(mediaRepositoryProvider);
+          await mediaRepo.getFileForMediaWithTimeout(
+            media,
+            timeout: const Duration(seconds: 2)
+          );
+          
+          // Utiliser un délai court pour permettre à l'animation de se terminer
+          await Future.delayed(const Duration(milliseconds: 50));
+          
+          // Créer une nouvelle liste pour éviter les problèmes de référence
+          // Utiliser toList() pour créer une copie complètement nouvelle
+          final newList = [media, ...currentList.toList()];
+          state = AsyncData(newList);
+          
+          // Précharger les images suivantes pour garantir une transition fluide
+          Future.delayed(const Duration(milliseconds: 200), () {
+            if (newList.length >= 3) {
+              final nextItems = newList.take(3).toList();
+              mediaRepo.getFilesForMediaBatch(nextItems, timeout: const Duration(seconds: 5))
+                .then((_) {
+                  debugPrint('Préchargement après undo terminé');
+                })
+                .catchError((e) {
+                  debugPrint('Erreur de préchargement après undo: ${e.toString()}');
+                });
+            }
+          });
+        }
+      } else {
+        // Si la liste est null, créer une nouvelle liste avec seulement cet élément
+        state = AsyncData([media]);
+        
+        // Précharger plus de médias en arrière-plan
+        Future.delayed(const Duration(milliseconds: 300), () {
+          _loadMore();
+        });
+      }
+    } catch (e) {
+      debugPrint('Erreur dans undo: ${e.toString()}');
+      // En cas d'erreur, essayer de recharger les médias
+      refreshMedia();
+    }
+  }
+  
+  // Force refresh the media list
+  Future<void> refreshMedia() async {
+    _page = 0;
+    _loadedPaths.clear();
+    _isLoading = false;
+    _hasMoreMedia = true;
+    _totalMediaCount = 0;
+    state = const AsyncLoading();
+    
+    try {
+      // Pour un rafraîchissement, on utilise la méthode rapide
+      final mediaRepo = ref.read(mediaRepositoryProvider);
+      
+      // Démarrer une synchronisation en arrière-plan
+      mediaRepo.startBackgroundSync();
+      
+      // Charger rapidement les médias initiaux
+      final initialMedia = await mediaRepo.getInitialMedia(limit: _pageSize);
+      
+      // Mettre à jour les compteurs
+      _page = 1;
+      _totalMediaCount = initialMedia.length;
+      
+      // Enregistrer les chemins pour éviter les doublons
+      for (final media in initialMedia) {
+        _loadedPaths.add(media.originalPath);
+      }
+      
+      state = AsyncData(initialMedia);
+      
+      // Précharger plus de médias en arrière-plan
+      if (initialMedia.length < _pageSize * 2) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          _loadMore();
+        });
+      }
+    } catch (e) {
+      debugPrint('Error refreshing media: ${e.toString()}');
+      state = AsyncError(e, StackTrace.current);
     }
   }
 }
