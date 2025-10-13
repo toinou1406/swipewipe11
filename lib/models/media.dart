@@ -1,5 +1,3 @@
-import 'package:photo_manager/photo_manager.dart';
-
 class Media {
   final int? id;
   final String originalPath; // This is the asset ID from photo_manager
@@ -36,14 +34,6 @@ class Media {
       mediaType: map['media_type'] as String,
       albumId: map['album_id'] as int?,
       deletedAt: map['deleted_at'] == null ? null : DateTime.parse(map['deleted_at'] as String),
-    );
-  }
-
-  factory Media.fromAsset(AssetEntity asset) {
-    return Media(
-      originalPath: asset.id,
-      filename: asset.title ?? 'Unknown',
-      mediaType: asset.type == AssetType.video ? 'video' : 'photo',
     );
   }
 
