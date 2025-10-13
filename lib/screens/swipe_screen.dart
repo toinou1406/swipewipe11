@@ -59,19 +59,35 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
       final List<app_media.Media> priorityItems = itemsToPreload.take(3).toList();
       final List<app_media.Media> regularItems = itemsToPreload.length > 3 ? itemsToPreload.sublist(3) : <app_media.Media>[];
       
+      // Charger d'abord les images prioritaires
       final mediaRepo = ref.read(mediaRepositoryProvider);
       
-      // Charger les fichiers un par un et les ajouter au cache
-      for (final item in itemsToPreload) {
-        try {
-          final file = await mediaRepo.getFileForMedia(item);
-          if (file != null && mounted) {
-            setState(() {
-              _fileCache[item.originalPath] = file;
-            });
-          }
-        } catch (e) {
-          debugPrint('Erreur de préchargement pour ${item.originalPath}: $e');
+      if (priorityItems.isNotEmpty) {
+        final priorityFiles = await mediaRepo.getFilesForMediaBatch(
+          priorityItems,
+          timeout: const Duration(seconds: 5) // Timeout court pour les images prioritaires
+        );
+
+        // Mettre à jour le cache immédiatement avec les fichiers prioritaires
+        if (mounted) {
+          setState(() {
+            _fileCache.addAll(priorityFiles);
+          });
+        }
+      }
+
+      // Ensuite charger les images régulières en arrière-plan
+      if (regularItems.isNotEmpty) {
+        final regularFiles = await mediaRepo.getFilesForMediaBatch(
+          regularItems,
+          timeout: const Duration(seconds: 20) // Timeout plus long pour les autres images
+        );
+
+        // Mettre à jour le cache avec les fichiers réguliers
+        if (mounted) {
+          setState(() {
+            _fileCache.addAll(regularFiles);
+          });
         }
       }
       
@@ -140,9 +156,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
       debugPrint('Photo à previousIndex ($previousIndex): ${mediaList[previousIndex].originalPath}');
     }
     
-    // On se fie au `previousIndex` fourni par CardSwiper.
-    // Le bug précédent venait probablement du fait qu'on supprimait toujours l'index 0,
-    // ce qui, combiné à un délai, créait une désynchronisation.
+    // On se fie au `previousIndex` fourni par CardSwiper pour identifier la bonne carte.
     if (previousIndex >= mediaList.length) {
       debugPrint('Swipe ignoré : index $previousIndex hors des limites de la liste (taille ${mediaList.length})');
       return false; // Index hors limites, on annule le swipe.
@@ -150,7 +164,8 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
 
     final media = mediaList[previousIndex];
     debugPrint('Photo qui sera traitée (index $previousIndex): ${media.originalPath}');
-    debugPrint('Swipe détecté - Direction: $direction');
+
+    debugPrint('Swipe détecté - Direction: $direction, Media sélectionné: ${media.originalPath}');
 
     // Précharger les prochaines images en arrière-plan (non-bloquant)
     if (mediaList.length > previousIndex + 1) {
@@ -161,33 +176,34 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
       if (nextMediaItems.isNotEmpty) {
         final mediaRepo = ref.read(mediaRepositoryProvider);
         // Fire and forget - ne pas attendre
-        for (final item in nextMediaItems) {
-          mediaRepo.getFileForMedia(item).then((file) {
-            if (file != null && mounted) {
-              setState(() {
-                _fileCache[item.originalPath] = file;
-              });
-            }
-          }).catchError((e) {
-            debugPrint('Erreur préchargement: $e');
-          });
-        }
+        mediaRepo.getFilesForMediaBatch(
+          nextMediaItems,
+          timeout: const Duration(seconds: 3)
+        ).then((nextFiles) {
+          if (mounted) {
+            setState(() {
+              _fileCache.addAll(nextFiles);
+            });
+          }
+        }).catchError((e) {
+          debugPrint('Erreur préchargement: $e');
+        });
       }
     }
 
-    try {
-      // Exécuter l'action avec l'index correct
-      if (direction == CardSwiperDirection.right) {
-        await _onSwipeRight(previousIndex);
-      } else if (direction == CardSwiperDirection.left) {
-        await _onSwipeLeft(media, previousIndex);
-      } else if (direction == CardSwiperDirection.bottom) {
-        // Pour le swipe vers le bas (album), on affiche le menu mais on ne supprime pas encore
-        // La suppression se fera quand l'utilisateur sélectionnera un album
-        await _onSwipeDown(media, previousIndex);
-        // Retourner false pour annuler l'animation du swipe
-        return false;
-      }
+      try {
+        // Exécuter l'action avec l'index correct
+        if (direction == CardSwiperDirection.right) {
+          await _onSwipeRight(previousIndex);
+        } else if (direction == CardSwiperDirection.left) {
+          await _onSwipeLeft(media, previousIndex);
+        } else if (direction == CardSwiperDirection.bottom) {
+          // Pour le swipe vers le bas (album), on affiche le menu mais on ne supprime pas encore
+          // La suppression se fera quand l'utilisateur sélectionnera un album
+          await _onSwipeDown(media, previousIndex);
+          // Retourner false pour annuler l'animation du swipe
+          return false;
+        }
         
         // Précharger plus d'images en arrière-plan
         _preloadNextMediaFiles();
@@ -440,7 +456,12 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
                         WidgetsBinding.instance.addPostFrameCallback((_) async {
                           try {
                             final mediaRepo = ref.read(mediaRepositoryProvider);
-                            final loadedFile = await mediaRepo.getFileForMedia(media);
+                            final loadedFile = await mediaRepo.getFileForMediaWithTimeout(
+                              media,
+                              timeout: index == 0
+                                ? const Duration(seconds: 1)
+                                : const Duration(seconds: 3)
+                            );
                             
                             if (loadedFile != null && mounted) {
                               setState(() {

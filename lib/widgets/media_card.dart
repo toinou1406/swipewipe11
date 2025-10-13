@@ -57,36 +57,35 @@ class MediaCard extends StatelessWidget {
     final dy = position.dy;
     SwipeDirection direction = SwipeDirection.none;
 
+    // Détermine la direction principale du swipe
     if (dx.abs() > dy.abs()) {
       direction = dx > 0 ? SwipeDirection.right : SwipeDirection.left;
     } else {
-      direction = dy > 0 ? SwipeDirection.down : SwipeDirection.up;
+      // On ignore le swipe vers le haut et le bas pour les indicateurs
+      // car ils sont gérés par d'autres gestes
+      if (dy < 0) direction = SwipeDirection.up;
+      if (dy > 0) direction = SwipeDirection.down;
     }
 
     Color color;
-    String text;
+    IconData icon;
 
     switch (direction) {
       case SwipeDirection.left:
         color = Colors.red;
-        text = 'DELETE';
+        icon = Icons.close;
         break;
       case SwipeDirection.right:
         color = Colors.green;
-        text = 'KEEP';
+        icon = Icons.check;
         break;
       case SwipeDirection.up:
-        color = Colors.blue;
-        text = 'RESTORE';
-        break;
       case SwipeDirection.down:
-        color = Colors.orange;
-        text = 'ALBUM';
-        break;
       case SwipeDirection.none:
-        return const SizedBox.shrink();
+        return const SizedBox.shrink(); // Pas d'indicateur pour haut/bas/none
     }
 
+    // Calcule l'opacité en fonction de la distance de swipe
     final opacity = min(position.distance / 150, 0.7);
 
     return Container(
@@ -95,13 +94,10 @@ class MediaCard extends StatelessWidget {
         color: color.withOpacity(opacity),
       ),
       child: Center(
-        child: Text(
-          text,
-          style: const TextStyle(
-            fontSize: 48,
-            fontWeight: FontWeight.bold,
-            color: kColorWhite,
-          ),
+        child: Icon(
+          icon,
+          color: kColorWhite,
+          size: 100, // Taille de l'icône augmentée pour être bien visible
         ),
       ),
     );
