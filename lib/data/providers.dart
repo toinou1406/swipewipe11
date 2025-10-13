@@ -72,11 +72,6 @@ final permissionStatusProvider = FutureProvider<PermissionState>((ref) async {
   return PhotoManager.requestPermissionExtend();
 });
 
-final mediaSyncProvider = FutureProvider<void>((ref) async {
-  final mediaRepo = ref.watch(mediaRepositoryProvider);
-  await mediaRepo.syncMediaWithDatabase();
-});
-
 // --- State Management Notifiers ---
 
 final albumListProvider = AsyncNotifierProvider<AlbumListNotifier, List<Album>>(AlbumListNotifier.new);
@@ -136,12 +131,19 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
     _isLoading = true;
     
     try {
-      final mediaRepo = ref.read(mediaRepositoryProvider);
-      // Utiliser la nouvelle méthode qui charge rapidement les médias initiaux
-      final initialMedia = await mediaRepo.getInitialMedia(limit: _pageSize);
+      final paths = await PhotoManager.getAssetPathList(type: RequestType.common);
+      final List<Media> initialMedia = [];
+
+      for (final path in paths) {
+        final assets = await path.getAssetListRange(start: 0, end: _pageSize);
+        for (final asset in assets) {
+          initialMedia.add(Media.fromAsset(asset));
+        }
+        if (initialMedia.length >= _pageSize) break;
+      }
       
       // Mettre à jour les compteurs
-      _page = 1; // On a déjà chargé la première page
+      _page = 1;
       _totalMediaCount = initialMedia.length;
       
       // Enregistrer les chemins pour éviter les doublons
@@ -149,10 +151,8 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
         _loadedPaths.add(media.originalPath);
       }
       
-      // Démarrer la synchronisation en arrière-plan pour les médias suivants
-      if (initialMedia.isNotEmpty) {
-        mediaRepo.startBackgroundSync();
-      }
+      // Démarrer la synchronisation en arrière-plan
+      ref.read(mediaRepositoryProvider).syncMediaWithDatabase();
 
       return initialMedia;
     } catch (e) {
@@ -209,38 +209,19 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
       final currentState = state.value ?? [];
       state = AsyncData([...currentState, ...newMedia]);
       debugPrint('Added ${newMedia.length} more items. Total: ${currentState.length + newMedia.length}');
-    } else if (_hasMoreMedia) {
-      // If we got no new media but still have more, try again with the next page
-      _loadMore();
     } else {
-      debugPrint('No more media to load');
-      // If we've truly run out of media, try to sync with the device
-      _syncAndReloadIfEmpty();
+      debugPrint('No more media to load from DB, checking for new media on device...');
+      // If we've truly run out of media from the DB, try to sync with the device
+      ref.read(mediaRepositoryProvider).syncMediaWithDatabase().then((_) {
+        // After sync, try to load more again.
+        _loadMore();
+      });
     }
   }
   
   // Version publique de _loadMore pour pouvoir l'appeler depuis l'extérieur
   Future<void> loadMore() async {
     await _loadMore();
-  }
-
-  // Sync with device and reload if we've run out of media
-  Future<void> _syncAndReloadIfEmpty() async {
-    final currentState = state.value ?? [];
-    if (currentState.isEmpty && !_isLoading) {
-      debugPrint('No media in state, syncing with device...');
-      try {
-        final mediaRepo = ref.read(mediaRepositoryProvider);
-        await mediaRepo.syncMediaWithDatabase();
-        
-        // Reset pagination and try again
-        _page = 0;
-        _hasMoreMedia = true;
-        _loadMore();
-      } catch (e) {
-        debugPrint('Error syncing media: ${e.toString()}');
-      }
-    }
   }
 
   Future<void> removeAt(int index) async {
@@ -282,13 +263,11 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           final nextItems = newList.take(3).toList();
           
           // Précharger en arrière-plan sans bloquer l'interface
-          mediaRepo.getFilesForMediaBatch(nextItems, timeout: const Duration(seconds: 5))
-            .then((_) {
-              debugPrint('Préchargement des 3 prochaines images terminé');
-            })
-            .catchError((e) {
-              debugPrint('Erreur de préchargement: ${e.toString()}');
+          for (final item in nextItems) {
+            mediaRepo.getFileForMedia(item).catchError((e) {
+              debugPrint('Erreur de préchargement en arrière-plan: ${e.toString()}');
             });
+          }
         }
         
         // Utiliser un délai court pour permettre à l'animation de se terminer
@@ -319,7 +298,7 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
         await Future.delayed(const Duration(milliseconds: 150));
 
         // Charger plus de médias immédiatement
-        _syncAndReloadIfEmpty();
+        loadMore();
       }
       
       // Enregistrer l'action pour permettre l'annulation
@@ -352,10 +331,7 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           
           // Précharger l'image que nous allons ajouter pour éviter les saccades
           final mediaRepo = ref.read(mediaRepositoryProvider);
-          await mediaRepo.getFileForMediaWithTimeout(
-            media,
-            timeout: const Duration(seconds: 2)
-          );
+          await mediaRepo.getFileForMedia(media);
 
           // Utiliser un délai court pour permettre à l'animation de se terminer
           await Future.delayed(const Duration(milliseconds: 50));
@@ -369,13 +345,11 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           Future.delayed(const Duration(milliseconds: 200), () {
             if (newList.length >= 3) {
               final nextItems = newList.take(3).toList();
-              mediaRepo.getFilesForMediaBatch(nextItems, timeout: const Duration(seconds: 5))
-                .then((_) {
-                  debugPrint('Préchargement après undo terminé');
-                })
-                .catchError((e) {
+              for (final item in nextItems) {
+                mediaRepo.getFileForMedia(item).catchError((e) {
                   debugPrint('Erreur de préchargement après undo: ${e.toString()}');
                 });
+              }
             }
           });
         }
@@ -405,14 +379,11 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
     state = const AsyncLoading();
     
     try {
-      // Pour un rafraîchissement, on utilise la méthode rapide
-      final mediaRepo = ref.read(mediaRepositoryProvider);
-
-      // Démarrer une synchronisation en arrière-plan
-      mediaRepo.startBackgroundSync();
+      // Pour un rafraîchissement, on utilise directement le dbHelper
+      final dbHelper = ref.read(databaseHelperProvider);
       
       // Charger rapidement les médias initiaux
-      final initialMedia = await mediaRepo.getInitialMedia(limit: _pageSize);
+      final initialMedia = await dbHelper.readUnsortedMedia(limit: _pageSize);
       
       // Mettre à jour les compteurs
       _page = 1;
