@@ -270,10 +270,6 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           }
         }
         
-        // Utiliser un délai court pour permettre à l'animation de se terminer
-        // avant de mettre à jour l'état, ce qui évite les problèmes d'affichage
-        await Future.delayed(const Duration(milliseconds: 150));
-
         // Mettre à jour l'état avec la nouvelle liste
         state = AsyncData(newList);
         
@@ -294,9 +290,6 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
         // Si c'est le dernier élément, vider la liste et charger plus de médias
         state = const AsyncData([]);
         
-        // Utiliser un délai court pour permettre à l'animation de se terminer
-        await Future.delayed(const Duration(milliseconds: 150));
-
         // Charger plus de médias immédiatement
         loadMore();
       }
@@ -332,9 +325,6 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
           // Précharger l'image que nous allons ajouter pour éviter les saccades
           final mediaRepo = ref.read(mediaRepositoryProvider);
           await mediaRepo.getFileForMedia(media);
-
-          // Utiliser un délai court pour permettre à l'animation de se terminer
-          await Future.delayed(const Duration(milliseconds: 50));
           
           // Créer une nouvelle liste pour éviter les problèmes de référence
           // Utiliser toList() pour créer une copie complètement nouvelle

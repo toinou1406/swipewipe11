@@ -28,7 +28,7 @@ class MediaRepository {
       // This is a simple filter, can be improved.
       if (path.name.toLowerCase().contains('whatsapp')) continue;
 
-      final List<AssetEntity> assets = await path.getAssetListRange(start: 0, end: path.assetCount);
+      final List<AssetEntity> assets = await path.getAssetListRange(start: 0, end: 10000); // Fetch all assets in this path
 
       for (final asset in assets) {
         // Check if the media already exists in the database
