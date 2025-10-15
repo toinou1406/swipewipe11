@@ -1,3 +1,6 @@
+import 'package:photo_manager/photo_manager.dart';
+import 'package:path/path.dart' as p;
+
 class Media {
   final int? id;
   final String originalPath; // This is the asset ID from photo_manager
@@ -34,6 +37,15 @@ class Media {
       mediaType: map['media_type'] as String,
       albumId: map['album_id'] as int?,
       deletedAt: map['deleted_at'] == null ? null : DateTime.parse(map['deleted_at'] as String),
+    );
+  }
+
+  // Helper factory to create a Media object directly from an AssetEntity
+  factory Media.fromAsset(AssetEntity asset) {
+    return Media(
+      originalPath: asset.id,
+      filename: asset.title ?? 'Untitled', // Use title as a fallback for filename
+      mediaType: asset.type == AssetType.video ? 'video' : 'photo',
     );
   }
 

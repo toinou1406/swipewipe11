@@ -28,25 +28,26 @@ class MediaRepository {
       // This is a simple filter, can be improved.
       if (path.name.toLowerCase().contains('whatsapp')) continue;
 
-      final List<AssetEntity> assets = await path.getAssetListRange(start: 0, end: 10000); // Fetch all assets in this path
+      final int assetCount = path.assetCount;
+      const int pageSize = 100; // Process 100 assets at a time
 
-      for (final asset in assets) {
-        // Check if the media already exists in the database
-        final List<Map<String, dynamic>> existing = await db.query(
-          'medias',
-          where: 'original_path = ?',
-          whereArgs: [asset.id], // Using asset.id as a unique path identifier
+      for (int i = 0; i < assetCount; i += pageSize) {
+        final List<AssetEntity> assets = await path.getAssetListRange(
+          start: i,
+          end: i + pageSize,
         );
 
-        if (existing.isEmpty) {
-          final file = await asset.file;
-          if (file != null) {
-            // If not, insert it
-            final newMedia = app_media.Media(
-              originalPath: asset.id,
-              filename: p.basename(file.path),
-              mediaType: asset.type == AssetType.video ? 'video' : 'photo',
-            );
+        for (final asset in assets) {
+          // Check if the media already exists in the database
+          final List<Map<String, dynamic>> existing = await db.query(
+            'medias',
+            where: 'original_path = ?',
+            whereArgs: [asset.id],
+          );
+
+          if (existing.isEmpty) {
+            // Use the new factory method for cleaner code
+            final newMedia = app_media.Media.fromAsset(asset);
             await _dbHelper.createMedia(newMedia);
           }
         }
@@ -59,8 +60,16 @@ class MediaRepository {
   }
 
   Future<File?> getFileForMedia(app_media.Media media) async {
-    final AssetEntity? asset = await AssetEntity.fromId(media.originalPath);
-    if (asset == null) return null;
-    return asset.file;
+    try {
+      final AssetEntity? asset = await AssetEntity.fromId(media.originalPath);
+      if (asset == null) {
+        print('Error: Could not find asset with ID ${media.originalPath}');
+        return null;
+      }
+      return await asset.file;
+    } catch (e) {
+      print('Error getting file for media ${media.originalPath}: $e');
+      return null;
+    }
   }
 }
