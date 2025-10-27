@@ -19,9 +19,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
   final CardSwiperController _swiperController = CardSwiperController();
   final ValueNotifier<Offset> _dragPosition = ValueNotifier(Offset.zero);
 
-  final Map<String, File> _fileCache = {};
-  final Map<int, Widget> _widgetCache = {}; // Cache pour les widgets des cartes
-  bool _isPreloading = false;
   bool _isProcessingSwipe = false; // Flag pour éviter les swipes multiples simultanés
 
   @override
@@ -29,98 +26,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     _swiperController.dispose();
     _dragPosition.dispose();
     super.dispose();
-  }
-
-  Future<void> _preloadNextMediaFiles() async {
-    if (_isPreloading) return;
-    if (mounted) setState(() { _isPreloading = true; });
-
-    try {
-      final mediaList = ref.read(swipeCardStateProvider).value ?? [];
-      if (mediaList.isEmpty) {
-        if (mounted) setState(() { _isPreloading = false; });
-        return;
-      }
-      
-      // Précharger plus d'éléments pour assurer un défilement fluide
-      // Augmenter à 20 pour avoir plus d'images préchargées
-      final itemsToPreload = mediaList.take(20).where(
-        (media) => !_fileCache.containsKey(media.originalPath)
-      ).toList();
-      
-      if (itemsToPreload.isEmpty) {
-        if (mounted) setState(() { _isPreloading = false; });
-        return;
-      }
-      
-      debugPrint('Préchargement de ${itemsToPreload.length} fichiers médias');
-      
-      // Prioriser les 3 premières images pour un chargement immédiat
-      final List<app_media.Media> priorityItems = itemsToPreload.take(3).toList();
-      final List<app_media.Media> regularItems = itemsToPreload.length > 3 ? itemsToPreload.sublist(3) : <app_media.Media>[];
-      
-      // Charger d'abord les images prioritaires
-      final mediaRepo = ref.read(mediaRepositoryProvider);
-      
-      if (priorityItems.isNotEmpty) {
-        final priorityFiles = await mediaRepo.getFilesForMediaBatch(
-          priorityItems,
-          timeout: const Duration(seconds: 5) // Timeout court pour les images prioritaires
-        );
-        
-        // Mettre à jour le cache immédiatement avec les fichiers prioritaires
-        if (mounted) {
-          setState(() {
-            _fileCache.addAll(priorityFiles);
-          });
-        }
-      }
-      
-      // Ensuite charger les images régulières en arrière-plan
-      if (regularItems.isNotEmpty) {
-        final regularFiles = await mediaRepo.getFilesForMediaBatch(
-          regularItems,
-          timeout: const Duration(seconds: 20) // Timeout plus long pour les autres images
-        );
-        
-        // Mettre à jour le cache avec les fichiers réguliers
-        if (mounted) {
-          setState(() {
-            _fileCache.addAll(regularFiles);
-          });
-        }
-      }
-      
-      // Conserver plus d'éléments en cache pour éviter les rechargements
-      if (_fileCache.length > 100) { // Augmenter encore la taille du cache
-        // Garder les 20 premiers éléments de la liste actuelle
-        final currentMediaPaths = mediaList.take(20).map((m) => m.originalPath).toSet();
-        
-        // Identifier les clés à supprimer (celles qui ne sont pas dans les 20 premiers éléments)
-        final keysToRemove = _fileCache.keys.where((key) => !currentMediaPaths.contains(key)).toList();
-        
-        // Ne supprimer que si nous avons trop d'éléments
-        if (keysToRemove.length > 20) {
-          final keysToRemoveNow = keysToRemove.sublist(0, keysToRemove.length - 20);
-          for (final key in keysToRemoveNow) {
-            _fileCache.remove(key);
-          }
-        }
-      }
-      
-      // Précharger plus de médias si nécessaire
-      if (mediaList.length < 10) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          ref.read(swipeCardStateProvider.notifier).loadMore();
-        });
-      }
-    } catch (e) {
-      debugPrint('Erreur lors du préchargement: ${e.toString()}');
-    } finally {
-      if (mounted) {
-        setState(() { _isPreloading = false; });
-      }
-    }
   }
 
   Future<bool> _onSwipe(int previousIndex, int? currentIndex, CardSwiperDirection direction) async {
@@ -135,9 +40,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     try {
       // Réinitialiser la position de glissement immédiatement
       _dragPosition.value = Offset.zero;
-      
-      // Nettoyer le cache de widgets pour la carte qui vient d'être swipée
-      _widgetCache.remove(previousIndex);
       
       // Vérifier que la liste de médias contient des éléments
       final mediaList = ref.read(swipeCardStateProvider).value;
@@ -164,35 +66,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     
     debugPrint('Swipe détecté - Direction: $direction, Media sélectionné: ${media.originalPath}');
     
-    // Précharger les prochaines images en arrière-plan (non-bloquant)
-    if (mediaList.length > 1) {
-      // Identifier les 3 prochaines images à précharger (indices 1, 2, 3)
-      final nextMediaItems = <app_media.Media>[];
-      for (int i = 1; i <= 3; i++) {
-        if (i < mediaList.length) {
-          nextMediaItems.add(mediaList[i]);
-        }
-      }
-      
-      // Précharger en arrière-plan sans bloquer le swipe
-      if (nextMediaItems.isNotEmpty) {
-        final mediaRepo = ref.read(mediaRepositoryProvider);
-        // Fire and forget - ne pas attendre
-        mediaRepo.getFilesForMediaBatch(
-          nextMediaItems,
-          timeout: const Duration(seconds: 3)
-        ).then((nextFiles) {
-          if (mounted) {
-            setState(() {
-              _fileCache.addAll(nextFiles);
-            });
-          }
-        }).catchError((e) {
-          debugPrint('Erreur préchargement: $e');
-        });
-      }
-    }
-    
       try {
         // Exécuter l'action immédiatement sans délai
         // Toujours utiliser l'index 0 car la carte swipée est toujours au sommet de la pile
@@ -207,9 +80,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
           // Retourner false pour annuler l'animation du swipe
           return false;
         }
-        
-        // Précharger plus d'images en arrière-plan
-        _preloadNextMediaFiles();
         
         // The undo (top swipe) is handled by a separate gesture detector and controller.
         return true;
@@ -296,10 +166,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
     super.initState();
     // Initialiser l'écran sans forcer un rafraîchissement complet
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Clear any existing cache
-      _fileCache.clear();
-      _widgetCache.clear();
-      
       // Request permissions if needed
       final permissionState = await PhotoManager.requestPermissionExtend();
       if (!permissionState.isAuth) {
@@ -320,18 +186,7 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
   Widget build(BuildContext context) {
     final mediaListAsync = ref.watch(swipeCardStateProvider);
 
-    // Force preload images when media list changes
-    ref.listen(swipeCardStateProvider, (prev, next) {
-      if(next.value != null && next.value!.isNotEmpty) {
-        // Immediately preload files when media list changes
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _preloadNextMediaFiles();
-        });
-      }
-    });
-
-    return Scaffold(
-      body: mediaListAsync.when(
+    return mediaListAsync.when(
         loading: () => const Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -353,8 +208,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
               const SizedBox(height: 20),
               ElevatedButton(
                 onPressed: () {
-                  _fileCache.clear();
-                  _widgetCache.clear();
                   ref.read(swipeCardStateProvider.notifier).refreshMedia();
                 },
                 child: const Text('Réessayer'),
@@ -374,7 +227,6 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
                   const SizedBox(height: 20),
                   ElevatedButton(
                     onPressed: () {
-                      _fileCache.clear();
                       ref.read(swipeCardStateProvider.notifier).refreshMedia();
                     },
                     child: const Text('Rechercher de nouvelles photos'),
@@ -384,14 +236,8 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
             );
           }
           
-          // Trigger preload if not already preloading
-          if (!_isPreloading) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _preloadNextMediaFiles();
-            });
-          }
-          
-          return GestureDetector(
+          return Center(
+            child: GestureDetector(
                   onVerticalDragUpdate: (details) {
                     // This gesture detector is only for the visual indicator for "undo"
                     if (details.delta.dy < -5) { // Swiping up
@@ -425,116 +271,60 @@ class _SwipeScreenState extends ConsumerState<SwipeScreen> {
                     cardBuilder: (context, index, percentThresholdX, percentThresholdY) {
                       // Vérification de sécurité pour éviter les erreurs d'index
                       if (index >= mediaList.length) {
-                        debugPrint('Index hors limites: $index >= ${mediaList.length}');
-                        return const Center(
-                          child: Text('Chargement...', style: TextStyle(color: Colors.white))
-                        );
+                        return const Center(child: Text('Chargement...', style: TextStyle(color: Colors.white)));
                       }
                       
                       final media = mediaList[index];
-                      final file = _fileCache[media.originalPath];
-                      
-                      // Log pour la carte du dessus uniquement
-                      if (index == 0) {
-                        debugPrint('Carte du dessus (index 0): ${media.originalPath}');
-                      }
-                      
-                      // Précharger seulement pour la première carte et si pas déjà en cours
-                      if (index == 0 && !_isPreloading) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          _preloadNextMediaFiles();
+                      final mediaRepo = ref.read(mediaRepositoryProvider);
+
+                      // Utiliser un FutureBuilder pour gérer le chargement de chaque carte
+                      return FutureBuilder<File?>(
+                        // La clé est essentielle pour que Flutter reconstruise le FutureBuilder
+                        // uniquement lorsque l'objet média change
+                        key: ValueKey(media.id),
+                        future: mediaRepo.getFileForMedia(media),
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState == ConnectionState.waiting) {
+                            // Afficher un indicateur de chargement pendant que le fichier est récupéré
+                            return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                          }
                           
-                          // Charger plus de médias si nécessaire
-                          if (mediaList.length < 10) {
-                            final currentList = ref.read(swipeCardStateProvider).value ?? [];
-                            if (currentList.isNotEmpty) {
-                              ref.read(swipeCardStateProvider.notifier).loadMore();
-                            }
+                          if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
+                            // Afficher un message d'erreur si le chargement échoue
+                            return const Center(child: Text('Erreur de chargement', style: TextStyle(color: Colors.white)));
                           }
-                        });
-                      }
-                      
-                      // Si le fichier n'est pas en cache, le charger
-                      if (file == null) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) async {
-                          try {
-                            final mediaRepo = ref.read(mediaRepositoryProvider);
-                            final loadedFile = await mediaRepo.getFileForMediaWithTimeout(
-                              media,
-                              timeout: index == 0 
-                                ? const Duration(seconds: 1)
-                                : const Duration(seconds: 3)
+
+                          final file = snapshot.data!;
+
+                          // La première carte (au-dessus) est interactive
+                          if (index == 0) {
+                            return ValueListenableBuilder<Offset>(
+                              valueListenable: _dragPosition,
+                              builder: (context, position, child) {
+                                return MediaCard(
+                                  mediaFile: file,
+                                  mediaType: media.mediaType,
+                                  position: position,
+                                  angle: position.dx / (MediaQuery.of(context).size.width / 2) * 0.2,
+                                );
+                              },
                             );
-                            
-                            if (loadedFile != null && mounted) {
-                              setState(() {
-                                _fileCache[media.originalPath] = loadedFile;
-                              });
-                            }
-                          } catch (e) {
-                            debugPrint('Erreur de chargement: ${e.toString()}');
-                          }
-                        });
-                        
-                        return Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const CircularProgressIndicator(strokeWidth: 2),
-                              const SizedBox(height: 16),
-                              Text(
-                                'Chargement...',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.white
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }
-                      
-                      // Utiliser le cache de widgets pour les cartes en arrière-plan (index > 0)
-                      // Cela évite les reconstructions et les saccades
-                      if (index > 0 && _widgetCache.containsKey(index)) {
-                        return _widgetCache[index]!;
-                      }
-                      
-                      // Construire le widget
-                      Widget cardWidget;
-                      
-                      if (index == 0) {
-                        // La première carte est interactive avec ValueListenableBuilder
-                        cardWidget = ValueListenableBuilder<Offset>(
-                          valueListenable: _dragPosition,
-                          builder: (context, position, child) {
+                          } else {
+                            // Les cartes en arrière-plan sont statiques
                             return MediaCard(
                               mediaFile: file,
                               mediaType: media.mediaType,
-                              position: position,
-                              angle: position.dx / (MediaQuery.of(context).size.width / 2) * 0.2,
+                              position: Offset.zero,
+                              angle: 0,
                             );
-                          },
-                        );
-                      } else {
-                        // Les cartes en arrière-plan sont statiques
-                        cardWidget = MediaCard(
-                          mediaFile: file,
-                          mediaType: media.mediaType,
-                          position: Offset.zero,
-                          angle: 0,
-                        );
-                        
-                        // Mettre en cache les cartes en arrière-plan
-                        _widgetCache[index] = cardWidget;
-                      }
-                      
-                      return cardWidget;
+                          }
+                        },
+                      );
                     },
                   ),
-                );
+                ),
+          );
         },
-      ),
-    );
+      );
   }
 }

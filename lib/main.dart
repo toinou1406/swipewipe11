@@ -31,8 +31,8 @@ class SwipeCleanApp extends ConsumerWidget {
 
 // This wrapper widget handles the entire startup flow:
 // 1. Check for permissions
-// 2. If granted, sync media
-// 3. If synced, show main app
+// 2. If granted, show main app
+// The media sync will now happen in the background.
 class AppStartupWrapper extends ConsumerWidget {
   const AppStartupWrapper({super.key});
 
@@ -46,50 +46,20 @@ class AppStartupWrapper extends ConsumerWidget {
       data: (permission) {
         // Check if permission grants access (authorized or limited)
         if (permission.hasAccess) {
-          // If permission is granted, move to the media sync phase
-          return const MediaSyncWrapper();
+          // If permission is granted, go directly to the main app.
+          // The SwipeNotifier will handle the initial load and background sync.
+          return const MainNavigationView();
         } else {
           // Otherwise, show the permission request screen
           return PermissionScreen(
             onPermissionGranted: () {
               // When permission is granted from the screen, we refresh the provider
-              // to re-trigger this build method and move to the MediaSyncWrapper.
+              // to re-trigger this build method and move to the MainNavigationView.
               ref.invalidate(permissionStatusProvider);
             },
           );
         }
       },
-    );
-  }
-}
-
-class MediaSyncWrapper extends ConsumerWidget {
-  const MediaSyncWrapper({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final mediaSync = ref.watch(mediaSyncProvider);
-
-    return mediaSync.when(
-      loading: () => const Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(),
-              SizedBox(height: 16),
-              Text('Syncing your media...'),
-            ],
-          ),
-        ),
-      ),
-      error: (err, stack) => Scaffold(
-        body: Center(
-          child: Text('Error syncing media: $err'),
-        ),
-      ),
-      // When sync is complete, show the main app
-      data: (_) => const MainNavigationView(),
     );
   }
 }

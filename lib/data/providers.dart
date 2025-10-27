@@ -72,11 +72,6 @@ final permissionStatusProvider = FutureProvider<PermissionState>((ref) async {
   return PhotoManager.requestPermissionExtend();
 });
 
-final mediaSyncProvider = FutureProvider<void>((ref) async {
-  final mediaRepo = ref.watch(mediaRepositoryProvider);
-  await mediaRepo.syncMediaWithDatabase();
-});
-
 // --- State Management Notifiers ---
 
 final albumListProvider = AsyncNotifierProvider<AlbumListNotifier, List<Album>>(AlbumListNotifier.new);
@@ -117,50 +112,20 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
   bool _hasMoreMedia = true; // Flag to track if more media is available
   static const int _pageSize = 50; // Increased page size for better performance
   final Set<String> _loadedPaths = {}; // Track loaded media paths to prevent duplicates
-  int _totalMediaCount = 0; // Track total media count for infinite scrolling
 
   @override
   Future<List<Media>> build() async {
     _page = 0;
-    _loadedPaths.clear();
+    _isLoading = false;
     _hasMoreMedia = true;
-    _totalMediaCount = 0;
+    _loadedPaths.clear();
     
-    // Utiliser la méthode rapide pour le chargement initial
-    return _fetchInitialMedia();
-  }
-  
-  // Méthode rapide pour le premier chargement
-  Future<List<Media>> _fetchInitialMedia() async {
-    if (_isLoading) return [];
-    _isLoading = true;
+    // Lancer une synchronisation en arrière-plan pour s'assurer que la base de données est à jour
+    // sans bloquer le chargement initial.
+    ref.read(mediaRepositoryProvider).syncMediaWithDatabase();
     
-    try {
-      final mediaRepo = ref.read(mediaRepositoryProvider);
-      // Utiliser la nouvelle méthode qui charge rapidement les médias initiaux
-      final initialMedia = await mediaRepo.getInitialMedia(limit: _pageSize);
-      
-      // Mettre à jour les compteurs
-      _page = 1; // On a déjà chargé la première page
-      _totalMediaCount = initialMedia.length;
-      
-      // Enregistrer les chemins pour éviter les doublons
-      for (final media in initialMedia) {
-        _loadedPaths.add(media.originalPath);
-      }
-      
-      // Démarrer la synchronisation en arrière-plan pour les médias suivants
-      if (initialMedia.isNotEmpty) {
-        mediaRepo.startBackgroundSync();
-      }
-      
-      return initialMedia;
-    } catch (e) {
-      debugPrint('Error fetching initial media: ${e.toString()}');
-      return [];
-    } finally {
-      _isLoading = false;
-    }
+    // Charger la première page directement depuis la base de données.
+    return _fetchNextPage();
   }
 
   Future<List<Media>> _fetchNextPage() async {
@@ -169,26 +134,21 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
 
     try {
       final dbHelper = ref.read(databaseHelperProvider);
+      // Charger les médias non triés en utilisant la pagination
       final newMedia = await dbHelper.readUnsortedMedia(limit: _pageSize, offset: _page * _pageSize);
-      _page++;
       
-      // If we got fewer items than requested, we've reached the end
+      // Filtrer les doublons qui pourraient déjà être dans l'état
+      final uniqueMedia = newMedia.where((media) => !_loadedPaths.contains(media.originalPath)).toList();
+      
+      if (uniqueMedia.isNotEmpty) {
+        _page++;
+        _loadedPaths.addAll(uniqueMedia.map((m) => m.originalPath));
+      }
+      
+      // Si on reçoit moins de médias que la taille de la page, on suppose qu'on est à la fin.
       if (newMedia.length < _pageSize) {
         _hasMoreMedia = false;
-        debugPrint('Reached end of media list. Total loaded: ${_totalMediaCount + newMedia.length}');
       }
-      
-      // Filter out any duplicates that might have been returned from the database
-      final uniqueMedia = <Media>[];
-      for (final media in newMedia) {
-        if (!_loadedPaths.contains(media.originalPath)) {
-          _loadedPaths.add(media.originalPath);
-          uniqueMedia.add(media);
-        }
-      }
-      
-      _totalMediaCount += uniqueMedia.length;
-      debugPrint('Loaded ${uniqueMedia.length} new media items. Total: $_totalMediaCount');
       
       return uniqueMedia;
     } catch (e) {
@@ -209,38 +169,19 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
       final currentState = state.value ?? [];
       state = AsyncData([...currentState, ...newMedia]);
       debugPrint('Added ${newMedia.length} more items. Total: ${currentState.length + newMedia.length}');
-    } else if (_hasMoreMedia) {
-      // If we got no new media but still have more, try again with the next page
-      _loadMore();
     } else {
-      debugPrint('No more media to load');
-      // If we've truly run out of media, try to sync with the device
-      _syncAndReloadIfEmpty();
+      debugPrint('No more media to load from DB, checking for new media on device...');
+      // If we've truly run out of media from the DB, try to sync with the device
+      ref.read(mediaRepositoryProvider).syncMediaWithDatabase().then((_) {
+        // After sync, try to load more again.
+        _loadMore();
+      });
     }
   }
   
   // Version publique de _loadMore pour pouvoir l'appeler depuis l'extérieur
   Future<void> loadMore() async {
     await _loadMore();
-  }
-
-  // Sync with device and reload if we've run out of media
-  Future<void> _syncAndReloadIfEmpty() async {
-    final currentState = state.value ?? [];
-    if (currentState.isEmpty && !_isLoading) {
-      debugPrint('No media in state, syncing with device...');
-      try {
-        final mediaRepo = ref.read(mediaRepositoryProvider);
-        await mediaRepo.syncMediaWithDatabase();
-        
-        // Reset pagination and try again
-        _page = 0;
-        _hasMoreMedia = true;
-        _loadMore();
-      } catch (e) {
-        debugPrint('Error syncing media: ${e.toString()}');
-      }
-    }
   }
 
   Future<void> removeAt(int index) async {
@@ -275,26 +216,6 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
         final newList = List<Media>.from(currentList);
         newList.removeAt(index);
         
-        // Précharger les 3 prochaines images AVANT de mettre à jour l'état
-        // pour garantir une transition fluide
-        if (newList.length >= 3) {
-          final mediaRepo = ref.read(mediaRepositoryProvider);
-          final nextItems = newList.take(3).toList();
-          
-          // Précharger en arrière-plan sans bloquer l'interface
-          mediaRepo.getFilesForMediaBatch(nextItems, timeout: const Duration(seconds: 5))
-            .then((_) {
-              debugPrint('Préchargement des 3 prochaines images terminé');
-            })
-            .catchError((e) {
-              debugPrint('Erreur de préchargement: ${e.toString()}');
-            });
-        }
-        
-        // Utiliser un délai court pour permettre à l'animation de se terminer
-        // avant de mettre à jour l'état, ce qui évite les problèmes d'affichage
-        await Future.delayed(const Duration(milliseconds: 150));
-        
         // Mettre à jour l'état avec la nouvelle liste
         state = AsyncData(newList);
         
@@ -315,11 +236,8 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
         // Si c'est le dernier élément, vider la liste et charger plus de médias
         state = const AsyncData([]);
         
-        // Utiliser un délai court pour permettre à l'animation de se terminer
-        await Future.delayed(const Duration(milliseconds: 150));
-        
         // Charger plus de médias immédiatement
-        _syncAndReloadIfEmpty();
+        loadMore();
       }
       
       // Enregistrer l'action pour permettre l'annulation
@@ -350,34 +268,10 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
             _loadedPaths.add(media.originalPath);
           }
           
-          // Précharger l'image que nous allons ajouter pour éviter les saccades
-          final mediaRepo = ref.read(mediaRepositoryProvider);
-          await mediaRepo.getFileForMediaWithTimeout(
-            media,
-            timeout: const Duration(seconds: 2)
-          );
-          
-          // Utiliser un délai court pour permettre à l'animation de se terminer
-          await Future.delayed(const Duration(milliseconds: 50));
-          
           // Créer une nouvelle liste pour éviter les problèmes de référence
           // Utiliser toList() pour créer une copie complètement nouvelle
           final newList = [media, ...currentList.toList()];
           state = AsyncData(newList);
-          
-          // Précharger les images suivantes pour garantir une transition fluide
-          Future.delayed(const Duration(milliseconds: 200), () {
-            if (newList.length >= 3) {
-              final nextItems = newList.take(3).toList();
-              mediaRepo.getFilesForMediaBatch(nextItems, timeout: const Duration(seconds: 5))
-                .then((_) {
-                  debugPrint('Préchargement après undo terminé');
-                })
-                .catchError((e) {
-                  debugPrint('Erreur de préchargement après undo: ${e.toString()}');
-                });
-            }
-          });
         }
       } else {
         // Si la liste est null, créer une nouvelle liste avec seulement cet élément
@@ -401,22 +295,17 @@ class SwipeNotifier extends AsyncNotifier<List<Media>> {
     _loadedPaths.clear();
     _isLoading = false;
     _hasMoreMedia = true;
-    _totalMediaCount = 0;
     state = const AsyncLoading();
     
     try {
-      // Pour un rafraîchissement, on utilise la méthode rapide
-      final mediaRepo = ref.read(mediaRepositoryProvider);
-      
-      // Démarrer une synchronisation en arrière-plan
-      mediaRepo.startBackgroundSync();
+      // Pour un rafraîchissement, on utilise directement le dbHelper
+      final dbHelper = ref.read(databaseHelperProvider);
       
       // Charger rapidement les médias initiaux
-      final initialMedia = await mediaRepo.getInitialMedia(limit: _pageSize);
+      final initialMedia = await dbHelper.readUnsortedMedia(limit: _pageSize);
       
       // Mettre à jour les compteurs
       _page = 1;
-      _totalMediaCount = initialMedia.length;
       
       // Enregistrer les chemins pour éviter les doublons
       for (final media in initialMedia) {
